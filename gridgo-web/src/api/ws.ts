@@ -35,7 +35,7 @@ class GameWebSocket {
    * @param token JWT access token（初始 token，重连时会自动从 store 获取最新值）
    * @param roomId 房间 ID，连接成功后发送初始化消息
    */
-  connect(token: string, roomId: string) {
+  connect(_token: string, roomId: string) {
     // 如果已有连接，先断开
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
       console.log(`[WS] Closing existing connection (state=${this.ws.readyState}) before reconnect`)
@@ -146,6 +146,10 @@ class GameWebSocket {
 
   disconnect() {
     this.stopHeartbeat()
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.reconnectAttempts = this.maxReconnectAttempts // 阻止重连
     this.ws?.close(1000, 'user disconnect')
     this.ws = null

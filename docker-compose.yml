@@ -1,0 +1,100 @@
+services:
+  # ===== MySQL 数据库 =====
+  mysql:
+    image: mysql:8.0
+    container_name: gridgo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gridgo123}
+      MYSQL_DATABASE: gridgo
+      MYSQL_CHARSET: utf8mb4
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-gridgo123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - gridgo-network
+
+  # ===== Redis 缓存 =====
+  redis:
+    image: redis:7-alpine
+    container_name: gridgo-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gridgo-network
+
+  # ===== 后端服务 =====
+  server:
+    build:
+      context: ./gridgo-server
+      dockerfile: Dockerfile
+    container_name: gridgo-server
+    restart: unless-stopped
+    env_file:
+      - ./docker/.env.docker
+    environment:
+      # Docker 内部通过服务名访问 MySQL 和 Redis
+      DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD:-gridgo123}@mysql:3306/gridgo
+      REDIS_URL: redis://redis:6379/0
+      HOST: 0.0.0.0
+      PORT: 8001
+    ports:
+      - "${SERVER_PORT:-8001}:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./docker/logs/server:/app/logs
+    networks:
+      - gridgo-network
+
+  # ===== 前端 + Nginx =====
+  web:
+    build:
+      context: ./gridgo-web
+      dockerfile: Dockerfile
+    container_name: gridgo-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      - server
+    networks:
+      - gridgo-network
+
+# ===== 数据卷 =====
+volumes:
+  mysql_data:
+    name: gridgo-mysql-data
+  redis_data:
+    name: gridgo-redis-data
+
+# ===== 网络 =====
+networks:
+  gridgo-network:
+    name: gridgo-network
+    driver: bridge

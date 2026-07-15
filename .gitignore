@@ -51,6 +51,8 @@ logs/
 
 # === Docker ===
 docker-compose.override.yml
+docker/.env.docker
+docker/logs/
 
 # === 测试 & 覆盖率 ===
 htmlcov/

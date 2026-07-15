@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getGameReplay } from '@/api/replay'
-import type { ReplayData, ReplayTurn, ReplayStep, ReplayPlayer } from '@/api/replay'
+import type { ReplayData, ReplayStep, ReplayPlayer } from '@/api/replay'
 import { computeAllSnapshots, type ReplaySnapshot } from '@/game/replayEngine'
 
 export type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'ended'
