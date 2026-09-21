@@ -1,0 +1,37 @@
+# ==================== GridGo 生产 override（对外入口） ====================
+# 用法（服务器，deploy/ 目录下）：
+#   docker compose -f docker-compose.yml -f compose.prod.yml up -d --build
+#
+# 合并规则备忘（与 OJ 一致）：
+#   - environment 映射按 key 覆盖；ports / env_file 为列表拼接
+#   - 网络 networks 段在 base 中已声明（external deploy_ojnet），本文件不再重复声明
+#
+# 本文件只负责对外入口：
+#   web 容器监听容器内 80 → 映射宿主机 81（81:80），站点挂根路径，
+#   对外访问 http://<服务器IP>:81/；API/WS 由 web 容器内 nginx 反代到 server:8001
+#   （前端构建配置不改，沿用 gridgo-web 现有 /api/、/ws/ 反代逻辑）
+services:
+  # ===== 前端静态托管 + nginx 入口（容器内 :80 → 宿主机 :81）=====
+  web:
+    container_name: deploy-gridgo-web
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    ports:
+      - "81:80"
+    depends_on:
+      server:
+        condition: service_healthy
+    networks: [ojnet]
+    restart: unless-stopped
+    healthcheck:
+      # 站点挂根路径，直接打首页即可
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'

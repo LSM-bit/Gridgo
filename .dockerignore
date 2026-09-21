@@ -1,0 +1,42 @@
+# 构建上下文（仓库根）忽略清单：server/web 两个镜像都以此目录为 context，
+# 用于把 node_modules（~200MB）、.venv（~110MB）等挡在构建上下文之外。
+# 注意：Docker 只读取 context 根目录的 .dockerignore，子目录同名的文件不生效。
+
+# === 版本控制 / 文档 ===
+.git
+.gitignore
+.gitattributes
+docs/
+*.md
+clear8001.md
+start.bat
+stop.bat
+
+# === Python ===
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+
+# === Node ===
+**/node_modules/
+**/dist/
+**/.pnpm-store/
+**/.vite/
+**/build.log
+
+# === 环境变量与密钥（绝不进镜像）===
+.env
+.env.*
+**/.env
+**/.env.*
+deploy/gridgo.env
+
+# === 日志 / 临时产物 ===
+*.log
+logs/
+temp/
+tmp/

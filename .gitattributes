@@ -1,0 +1,11 @@
+# 换行规范：部署脚本与容器配置必须以 LF 入库。
+# 否则在 Linux 服务器上会出现 "\r: command not found"（.sh）或 compose/nginx 解析异常。
+# 仅约束下列类型，不改动其它文件的处理方式。
+*.sh          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.conf        text eol=lf
+*.env         text eol=lf
+*.env.example text eol=lf
+Dockerfile    text eol=lf
+*.Dockerfile  text eol=lf

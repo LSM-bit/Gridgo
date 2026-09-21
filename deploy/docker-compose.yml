@@ -1,0 +1,59 @@
+# ======================== GridGo 生产部署（base） ========================
+# 形态：只运行 GridGo 自有服务（后端 server + 前端 web），数据库与缓存**完全复用**
+#       同一台服务器上 OJ 已运行的基础设施容器 —— 本项目不新起 postgres / redis。
+#
+#   PostgreSQL → deploy-postgres-1:5432   库/用户 gridgo（由 deploy/deploy-remote.sh 幂等创建）
+#   Redis      → deploy-redis-1:6379      GridGo 用 db1，与 OJ 的 db0 做键空间隔离
+#   网络       → 接入 OJ 的 compose 项目网络 deploy_ojnet（external 引用，不新建）
+#   对外入口   → 仅 web 容器发布宿主机 81 端口（定义在 compose.prod.yml），server 不发布端口
+#
+# 服务器用法（在 deploy/ 目录下）：
+#   docker compose -f docker-compose.yml -f compose.prod.yml up -d --build
+#
+# 容器命名约定（对齐 OJ deploy 目录，2026-09 起）：
+#   GridGo 专属服务一律显式命名 deploy-gridgo-<服务名>，全局唯一、不带 project 前缀；
+#   可复用基础设施 postgres / redis 由 OJ 提供、容器名 deploy-postgres-1 / deploy-redis-1，
+#   本项目既不定义也不管理它们（只通过 external 网络连接）。
+#
+# 注意：compose 的 environment 优先级高于 env_file，密钥一律走 env_file 注入；
+#       且后端 Settings 为 extra=forbid（pydantic-settings），gridgo.env 内
+#       不得出现 app/core/config.py 未声明的键（写了会导致容器启动即失败）。
+
+networks:
+  # OJ 的 compose 项目网络（项目名 deploy + OJ 网络名 ojnet）。
+  # external: 本项目不创建、不删除该网络；OJ 未部署时 compose 会直接报错（部署脚本已前置校验）。
+  ojnet:
+    external: true
+    name: deploy_ojnet
+
+services:
+  # ===== 后端：FastAPI + uvicorn（容器内 :8001）=====
+  server:
+    container_name: deploy-gridgo-server
+    build:
+      context: ..                    # 构建上下文 = 仓库根（与 OJ 的 deploy/*.Dockerfile 一致）
+      dockerfile: deploy/server.Dockerfile
+    env_file:
+      - gridgo.env                   # DATABASE_URL / REDIS_URL / JWT_SECRET_KEY / GAME_* 等
+    expose:
+      - "8001"                       # 只在 compose 网络内暴露给 web；不映射到宿主机
+    networks: [ojnet]
+    restart: unless-stopped          # 复用外部 PG/Redis：对方未就绪时容器自动重试拉起
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: '0.50'
+
+# 无自有数据卷：业务数据全部落在 OJ 的 postgres（库 gridgo）与 redis（db1）中。
+# 因此本项目 down / 重建**不会**丢数据；反之也不要对本项目执行 down -v（无意义）。

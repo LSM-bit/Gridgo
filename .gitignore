@@ -52,6 +52,12 @@ Desktop.ini
 docker-compose.override.yml
 docker/.env.docker
 
+# === 服务器部署密钥（deploy/ 下，绝不入库） ===
+deploy/gridgo.env
+deploy/.env
+deploy/*.env
+!deploy/*.env.example
+
 # === 测试 & 覆盖率 ===
 htmlcov/
 .coverage
