@@ -19,6 +19,12 @@
 #       且后端 Settings 为 extra=forbid（pydantic-settings），gridgo.env 内
 #       不得出现 app/core/config.py 未声明的键（写了会导致容器启动即失败）。
 
+# 独立的 compose 项目名：必须与 OJ 区分开。
+# OJ 的部署目录是 /home/deploy/oj/deploy，其 compose 项目名默认为目录名 deploy；
+# 本项目目录也叫 deploy，若不显式改名会与 OJ 归为同一个项目，导致同名服务 web
+# 互相顶掉容器（曾致 OJ 前端 deploy-oj-web 被替换删除）。
+name: gridgo
+
 networks:
   # OJ 的 compose 项目网络（项目名 deploy + OJ 网络名 ojnet）。
   # external: 本项目不创建、不删除该网络；OJ 未部署时 compose 会直接报错（部署脚本已前置校验）。
@@ -30,6 +36,8 @@ services:
   # ===== 后端：FastAPI + uvicorn（容器内 :8001）=====
   server:
     container_name: deploy-gridgo-server
+    # 显式镜像名：避免 compose 默认 <project>_<service> 命名与 OJ 的 deploy-server 撞 tag
+    image: gridgo-server:latest
     build:
       context: ..                    # 构建上下文 = 仓库根（与 OJ 的 deploy/*.Dockerfile 一致）
       dockerfile: deploy/server.Dockerfile

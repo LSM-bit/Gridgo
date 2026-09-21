@@ -14,6 +14,9 @@ services:
   # ===== 前端静态托管 + nginx 入口（容器内 :80 → 宿主机 :81）=====
   web:
     container_name: deploy-gridgo-web
+    # 显式镜像名：compose 默认会按 <project>_<service> 命名，OJ 的 web 镜像同样叫
+    # deploy-web，两项目会互相覆盖镜像 tag。这里固定为 gridgo-web 彻底隔离。
+    image: gridgo-web:latest
     build:
       context: ..
       dockerfile: deploy/web.Dockerfile
