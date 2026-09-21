@@ -1,29 +1,24 @@
 services:
-  # ===== MySQL 数据库 =====
-  mysql:
-    image: mysql:8.0
-    container_name: gridgo-mysql
+  # ===== PostgreSQL 数据库 =====
+  postgres:
+    image: postgres:16-alpine
+    container_name: gridgo-postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gridgo123}
-      MYSQL_DATABASE: gridgo
-      MYSQL_CHARSET: utf8mb4
+      POSTGRES_USER: ${POSTGRES_USER:-gridgo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gridgo123}
+      POSTGRES_DB: ${POSTGRES_DB:-gridgo}
       TZ: Asia/Shanghai
     ports:
-      - "${MYSQL_PORT:-3307}:3306"
+      - "${POSTGRES_PORT:-3307}:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    command: >
-      --character-set-server=utf8mb4
-      --collation-server=utf8mb4_unicode_ci
-      --default-authentication-plugin=mysql_native_password
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-gridgo123}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gridgo} -d ${POSTGRES_DB:-gridgo}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 20s
     networks:
       - gridgo-network
 
@@ -55,15 +50,15 @@ services:
     env_file:
       - ./docker/.env.docker
     environment:
-      # Docker 内部通过服务名访问 MySQL 和 Redis
-      DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD:-gridgo123}@mysql:3306/gridgo
+      # Docker 内部通过服务名访问 PostgreSQL 和 Redis
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gridgo}:${POSTGRES_PASSWORD:-gridgo123}@postgres:5432/gridgo
       REDIS_URL: redis://redis:6379/0
       HOST: 0.0.0.0
       PORT: 8001
     ports:
       - "${SERVER_PORT:-8001}:8001"
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -86,8 +81,8 @@ services:
 
 # ===== 数据卷 =====
 volumes:
-  mysql_data:
-    name: gridgo-mysql-data
+  postgres_data:
+    name: gridgo-postgres-data
   redis_data:
     name: gridgo-redis-data
 

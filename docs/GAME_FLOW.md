@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: ee1a9111a266e63ab5b365271262c0db_b373d745b58511f19ef152540024e231
+    ReservedCode1: qZofDLMIMF3apN9MwiVy9ot+Gu48z/p22cnNBYt2JKnK+zeyuuCjryOfxBPt+DTTjLrgP8zrzmoTkwUve7rXEZBKnZQ+ryTOQ9XomZpfX4SfyqDJaVC8+Xa3iDqJIxcqTQ+fenjLoFVhq4waEDIdnhalLxwi/2x2yC368zz9/yKLaNU2BzPkfGQ88UU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: ee1a9111a266e63ab5b365271262c0db_b373d745b58511f19ef152540024e231
+    ReservedCode2: qZofDLMIMF3apN9MwiVy9ot+Gu48z/p22cnNBYt2JKnK+zeyuuCjryOfxBPt+DTTjLrgP8zrzmoTkwUve7rXEZBKnZQ+ryTOQ9XomZpfX4SfyqDJaVC8+Xa3iDqJIxcqTQ+fenjLoFVhq4waEDIdnhalLxwi/2x2yC368zz9/yKLaNU2BzPkfGQ88UU=
+---
+
 # GridGo - 完整游戏流程
 
 > 基于当前已实现的房间系统、AI 系统、聊天系统，描述从"开始游戏"到"游戏结束"的完整对局流程。
@@ -24,8 +35,11 @@
   - [5.2 破产机制](#52-破产机制)
   - [5.3 拍卖机制](#53-拍卖机制)
   - [5.4 卡片事件机制](#54-卡片事件机制)
+  - [5.5 交易机制](#55-交易机制)
 - [六、AI 决策流程](#六ai-决策流程)
 - [七、WebSocket 消息流](#七websocket-消息流)
+  - [7.2 心跳与断线](#72-心跳与断线)
+  - [7.3 连接关闭码](#73-连接关闭码)
 - [八、数据存储策略](#八数据存储策略)
 - [九、异常与边界处理](#九异常与边界处理)
 
@@ -71,7 +85,7 @@
 ┌──────────────────────────────────────────────────────────┐
 │  阶段三：游戏结束                                          │
 │  ├─ 广播 game.over（含最终排名、资产统计）                   │
-│  ├─ 保存对局记录到 MySQL                                   │
+│  ├─ 保存对局记录到 PostgreSQL                              │
 │  ├─ 更新用户统计（胜场、积分等）                             │
 │  ├─ 房间状态改为 finished                                   │
 │  ├─ 清理 Redis 中的 GameState                              │
@@ -138,21 +152,28 @@
       "is_connected": true
     }
   ],
-  "board": {
-    "tiles": [
-      {"id": 0, "type": "START", "owner_id": null, "build_level": 0, "is_mortgaged": false},
-      {"id": 1, "type": "PROPERTY", "name": "朝阳路", "group": "brown", "price": 60, "owner_id": null, "build_level": 0, "is_mortgaged": false},
-      "..."
-    ]
-  },
+  "tiles": [
+    {"position": 0, "name": "起点", "tile_type": "START", "owner_id": null, "build_level": 0, "is_mortgaged": false},
+    {"position": 1, "name": "朝阳路", "tile_type": "PROPERTY", "tile_group": "brown", "price": 60, "owner_id": null, "build_level": 0, "is_mortgaged": false},
+    "..."
+  ],
   "chance_deck": ["C01", "C05", "C03", "..."],
   "fate_deck": ["F02", "F08", "F04", "..."],
   "dice": {"values": [0, 0], "total": 0, "is_double": false},
   "consecutive_doubles": 0,
   "auction": null,
+  "pending_trades": [],
+  "station_rent": {"...": "..."},
+  "utility_multiplier": {"...": "..."},
+  "initial_cash": 1500,
+  "max_turns": 100,
+  "turn_timeout": 30,
   "created_at": "2026-07-11T00:00:00Z"
 }
 ```
+
+> **字段口径**（`app/game/schemas.py::GameState`）：`game_id`、`room_id`、`map_id`、`turn_number`、`current_player_index`、`phase`、`players`、`tiles`、`dice`、`consecutive_doubles`、`chance_deck`、`fate_deck`、`chance_discard`、`fate_discard`、`auction`、`pending_trades`、`station_rent`、`utility_multiplier`、`start_bonus`、`jail_bail`、`max_build_level`、`initial_cash`、`max_turns`、`turn_timeout`、`created_at`。
+> 地块为**扁平 `tiles` 数组**（元素字段 `position` / `name` / `tile_type` / `tile_group` / `group_color` / `price` / `build_cost` / `rent_0`…`rent_5` / `tax_amount` / `tax_is_percent` / `owner_id` / `build_level` / `is_mortgaged`），**不存在 `board` 嵌套层**。
 
 ### 2.3 前端跳转
 
@@ -201,9 +222,7 @@ Room.vue 检测到 room.status === "playing"
                      │WAIT_DECISION│   │ FREE_ACTION │
                      └────────┬────┘   └─────┬──────┘
                      玩家决策 │              │ 可选操作完成
-                     ┌────────▼────┐         │
-                     │   RESOLVED  │◄────────┘
-                     └────────┬────┘
+                              └──────────────┘
                               │
                      ┌────────▼────┐
                      │  TURN_END   │
@@ -234,7 +253,7 @@ Room.vue 检测到 room.status === "playing"
 - 更新 `turn_number += 1`
 - 设置 `phase = "WAIT_ROLL"`
 - 启动 30 秒回合计时器
-- 如果当前玩家是 AI，延迟 1-5 秒后自动进入掷骰阶段
+- 如果当前玩家是 AI，延迟 1-2 秒后自动进入掷骰阶段
 
 ---
 
@@ -460,7 +479,7 @@ Room.vue 检测到 room.status === "playing"
 }
        │
        ▼
-保存对局记录到 MySQL (game_records + game_players)
+保存对局记录到 PostgreSQL (game_records + game_players)
   ├─ 记录对局配置快照
   ├─ 记录总回合数、胜者、结束原因
   ├─ 记录每位玩家的最终排名、资产、是否破产
@@ -555,7 +574,7 @@ Room.vue 检测到 room.status === "playing"
 
 拍卖流程:
   ├─ 服务器广播 game.auction_start
-  │   { tile_id, start_price: 购买价×50% }
+  │   { tile_id, start_price: 购买价×50%, min_increment: 10 }
   │
   ├─ 所有未破产玩家可出价
   │   ├─ 最低加价: 10
@@ -569,9 +588,9 @@ Room.vue 检测到 room.status === "playing"
       { tile_id, winner_id, final_price }
 
 AI 拍卖策略:
-  ├─ 简单: 50% 概率出价，最多出到购买价的 80%
-  ├─ 中等: 基于地产价值评估出价，最多出到购买价的 100%
-  └─ 困难: 模拟地产收益期望，可能超过购买价
+  ├─ 简单: 50% 概率出价，上限为购买价 ×0.8，每次加价 10
+  ├─ 中等: 上限为购买价 ×1.0，且需保留 ≥200 现金
+  └─ 困难: ROI 规则评估，上限为购买价 ×1.3，且需保留 ≥100 现金
 ```
 
 ### 5.4 卡片事件机制
@@ -592,6 +611,49 @@ AI 拍卖策略:
   ├─ 获得后存入 player.get_out_of_jail_cards
   ├─ 在监狱中可选择使用
   └─ 使用后放回对应牌堆底部
+```
+
+### 5.5 交易机制
+
+```
+触发: 自由行动阶段，玩家 A 向玩家 B 发起交易（game.trade_offer）
+
+提议载荷:
+  {
+    target_id: B,                      // 交易对象
+    offer:   { cash: int, properties: [tile_id, ...] },   // A 付出
+    request: { cash: int, properties: [tile_id, ...] }    // A 索取
+  }
+
+服务端校验（不通过则静默丢弃，不生成提议）:
+  ├─ phase != GAME_OVER 且 A、B 均未破产，A != B
+  ├─ A.cash >= offer.cash 且 B.cash >= request.cash
+  ├─ offer.properties 全部归 A 所有
+  └─ request.properties 全部归 B 所有
+
+提议登记:
+  ├─ 服务端生成 trade_id（12 位 hex），写入 GameState.pending_trades
+  ├─ 同一对玩家（A→B）的旧提议自动失效，仅保留最新一条
+  ├─ 广播 game.trade_offer { trade_id, from_id, to_id, offer }
+  └─ 定向推送 game.trade_received { trade_id, from_id, offer } 给 B
+
+响应:
+  ├─ B 发送 game.trade_accept { trade_id }
+  │   ├─ 二次校验现金与地产归属（提议可能已过期）
+  │   │   ├─ 现金不足 → 自动拒绝（reason=insufficient_cash）
+  │   │   └─ 地产易主 → 自动拒绝（reason=property_changed）
+  │   ├─ 现金双向结算 + 地产双向过户 + 从 pending_trades 移除
+  │   └─ 广播 game.trade_completed { trade_id, from_id, to_id, offer, cash }
+  │             game.trade_accept   { trade_id, from_id, to_id }
+  │
+  └─ B 拒绝 或 A 撤回（game.trade_reject { trade_id }）
+      ├─ 移除提议，写回合日志 trade_reject（含 reason）
+      └─ 广播 game.trade_reject { trade_id, from_id, to_id, reason }
+
+约束:
+  ├─ 交易不改变回合归属，不受掷骰/移动阶段影响
+  ├─ 观战者与破产玩家不可发起、不可响应
+  └─ 交易提议不设超时，跟随 GameState 存续于 Redis（TTL 24h）
 ```
 
 ---
@@ -618,7 +680,7 @@ AI 回合开始
   ├─ 4. 自由行动决策
   │     ├─ 是否升级地产
   │     ├─ 是否抵押/赎回
-  │     └─ AI 不主动发起交易（V1.0）
+  │     └─ AI 不主动发起交易（引擎未实现 AI 发起交易）
   │
   └─ 5. 结束回合
 ```
@@ -638,8 +700,8 @@ AI 回合开始
 | 难度 | 策略 |
 |------|------|
 | easy | 50% 概率购买，不考虑策略 |
-| medium | 评估：现金占比、垄断潜力、保留应急资金(200) |
-| hard | 蒙特卡洛模拟 N 步后的期望收益 |
+| medium | 规则评估：现金占比、垄断潜力，保留应急资金 200 |
+| hard | ROI 规则：租金回报率 > 5% 且回本 < 10 回合则购买（**无蒙特卡洛 / Minimax 模拟**） |
 
 ---
 
@@ -684,19 +746,33 @@ S → All: game.turn_change    { current_player_id: 8, turn_number: 2 }
 ### 7.2 心跳与断线
 
 ```
+[连接握手 - 建立连接后首帧]
+C → S:   { "room_id": "75873edb9a92" }        // 必须首帧发送，缺失则 4003 关闭
+S → C:   state.snapshot  { 完整游戏状态, is_spectator }
+
 [心跳 - 每 30 秒]
 C → S:   system.ping         {}
 S → C:   system.pong         {}
 
 [玩家断线]
-S → All: system.player_disconnected { player_id: 8 }
-         → AI 暂代该玩家操作
+S → All: system.player_disconnected { player_id: 8, mode: "offline" }
+         → 记录离线时刻，AI 暂代该玩家操作
 
 [玩家重连]
-C → S:   建立新 WebSocket 连接
+C → S:   建立新 WebSocket 连接 + 首帧 { "room_id": ... }
 S → C:   state.snapshot     { 完整游戏状态 }
-S → All: system.player_reconnected { player_id: 8 }
+S → All: system.player_reconnected { player_id: 8, mode, offline_seconds }
 ```
+
+### 7.3 连接关闭码
+
+| 关闭码 | 触发条件 |
+|--------|----------|
+| 4001 | token 无效 / 鉴权失败 |
+| 4002 | 首帧消息格式错误（非合法 JSON） |
+| 4003 | 首帧缺少 room_id |
+| 4004 | 对局初始化失败（房间未开局 / 玩家不在房中） |
+| 4005 | 对局状态不存在 |
 
 ---
 
@@ -706,14 +782,17 @@ S → All: system.player_reconnected { player_id: 8 }
 
 | Key | 类型 | TTL | 说明 |
 |-----|------|-----|------|
-| `room:{id}` | String (JSON) | 24h | 房间信息 |
-| `room:code:{code}` | String | 24h | code → id 映射 |
+| `room:{id}` | String (JSON) | 4h | 房间运行时状态 |
+| `room:code:{code}` | String | 4h | code → id 映射 |
+| `room:pwd:{id}` | String | 4h | 房间密码哈希（有密码时写入） |
 | `room:list` | Set | - | 等待中的房间 ID 集合 |
 | `game:{id}` | String (JSON) | 24h | 游戏状态（GameState） |
+| `game:{id}:cards` | String (JSON) | 24h | 本局卡组（含弃牌堆状态） |
+| `map:{map_id}` | String (JSON) | 1h | 地图模板缓存 |
 | `chat:{room_id}` | Sorted Set | 24h | 聊天消息 |
 | `chat:{room_id}:seq` | String | 24h | 聊天消息自增序号 |
 
-### 8.2 MySQL 存储（持久数据）
+### 8.2 PostgreSQL 存储（持久数据）
 
 | 表 | 写入时机 | 说明 |
 |----|----------|------|
@@ -729,7 +808,7 @@ S → All: system.player_reconnected { player_id: 8 }
   Redis (game:{id}) ←→ GameEngine ←→ WebSocket
 
 游戏结束:
-  Redis GameState → 生成 game_records + game_players → MySQL
+  Redis GameState → 生成 game_records + game_players → PostgreSQL
   Redis GameState → 清理
   Redis room:{id} → status="finished" → 延迟清理
 ```
@@ -750,16 +829,21 @@ S → All: system.player_reconnected { player_id: 8 }
 
 ### 9.2 断线重连
 
-| 断线时长 | 处理方式 |
-|----------|----------|
-| < 30s | 重连后发送增量更新，无缝恢复 |
-| 30s ~ 3min | AI 暂代操作，重连后发送全量快照恢复 |
-| > 3min | 判定退出，AI 持续代打至游戏结束 |
+| 断线时长 | 恢复档位（`mode`） | 处理方式 |
+|----------|-------------------|----------|
+| 从未断开 | `reconnect`（无广播） | 玩家本就在线，仅复位连接标记，不广播 `system.player_reconnected` |
+| ≤ 30s | `resume_incremental` | 复位连接标记；重连首帧仍为 `state.snapshot` 全量快照（档位名沿用代码 `reconnect_mode`，未实现字段级增量推送） |
+| 30s ~ 3min | `resume_snapshot` | AI 暂代操作，重连后发送全量快照恢复 |
+| > 3min | `left_game` | 判定退出，AI 持续代打至游戏结束 |
+
+> 阈值常量：`RECONNECT_INCREMENT_WINDOW = 30`（秒）、`RECONNECT_AI_WINDOW = 180`（秒）。
+> 断线时服务端调用 `mark_disconnected` 记录离线时刻；重连时 `mark_connected` 依据离线时长返回上述档位，并广播
+> `system.player_reconnected { player_id, mode, offline_seconds }`，同时写入 `game_turn_logs`（操作类型 `reconnect`）。
 
 ### 9.3 并发安全
 
 - 每个游戏房间使用 `asyncio.Lock` 串行处理操作
-- WebSocket 消息带 `seq` 序号，服务端校验防止乱序
+- 消息信封为 `{type, data, timestamp}`，**不含 `seq` 字段**；同一房间的操作由房间锁串行处理，不依赖序号去乱序
 - Redis 操作使用 pipeline 保证原子性
 
 ### 9.4 游戏异常结束
@@ -780,10 +864,10 @@ S → All: system.player_reconnected { player_id: 8 }
 
 | 层次 | 存储位置 | 数据 | 读写频率 |
 |------|----------|------|----------|
-| **地图模板** | MySQL | 地图定义（地块配置、租金表等），由管理员维护 | 低（只在创建/修改地图时写入） |
+| **地图模板** | PostgreSQL | 地图定义（地块配置、租金表等），由管理员维护 | 低（只在创建/修改地图时写入） |
 | **游戏状态** | Redis | 每局游戏中地块的实时状态（归属、建筑等级、抵押） | 高（每个回合多次读写） |
 
-地图模板是"蓝图"，游戏状态是"实例"。一局游戏开始时，从 MySQL 加载地图模板，初始化为 Redis 中的 GameState；游戏进行中只操作 Redis；游戏结束后，最终状态落库到 MySQL。
+地图模板是"蓝图"，游戏状态是"实例"。一局游戏开始时，从 PostgreSQL 加载地图模板，初始化为 Redis 中的 GameState；游戏进行中只操作 Redis；游戏结束后，最终状态落库到 PostgreSQL。
 
 ### 10.2 数据库表设计
 
@@ -1020,7 +1104,7 @@ S → All: system.player_reconnected { player_id: 8 }
 游戏开始
    │
    ▼
-从 MySQL 加载地图模板
+从 PostgreSQL 加载地图模板
   ├─ SELECT * FROM maps WHERE id = 'classic'
   ├─ SELECT * FROM map_tiles WHERE map_id = 'classic' ORDER BY position
   ├─ SELECT * FROM map_station_rent WHERE map_id = 'classic' ORDER BY owned_count
@@ -1029,11 +1113,7 @@ S → All: system.player_reconnected { player_id: 8 }
        │
        ▼
 缓存到 Redis（避免每局重复查库）
-  ├─ map:classic:info    → 地图基本信息 JSON（TTL=1h）
-  ├─ map:classic:tiles   → 地块列表 JSON（TTL=1h）
-  ├─ map:classic:station → 车站租金 JSON（TTL=1h）
-  ├─ map:classic:utility → 设施租金 JSON（TTL=1h）
-  └─ map:classic:cards   → 卡片列表 JSON（TTL=1h）
+  └─ map:classic → 地图模板整体 JSON（基本信息 + 地块 + 车站租金 + 设施租金 + 卡片；键名 `map:{map_id}`，TTL=1h）
        │
        ▼
 初始化 GameState（每局游戏实例）
@@ -1045,7 +1125,7 @@ S → All: system.player_reconnected { player_id: 8 }
 
 ### 10.6 多地图扩展
 
-创建新地图只需往 MySQL 插入数据，无需改代码：
+创建新地图只需往 PostgreSQL 插入数据，无需改代码：
 
 ```sql
 -- 创建新地图 "城市风云"
@@ -1092,3 +1172,4 @@ def calculate_rent(tile: MapTile, owner: Player, game_state: GameState, dice_tot
     else:
         return 0  # 非可购买地块无租金
 ```
+*（内容由AI生成，仅供参考）*

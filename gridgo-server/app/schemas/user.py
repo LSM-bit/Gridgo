@@ -55,6 +55,13 @@ class UserStats(BaseModel):
     total_assets: int = 0
     avg_rank: float = 0.0
     bankruptcies: int = 0
+    # ─── 积分与排行榜字段（对齐 docs/PROJECT.md D-03 / docs/GAME_FLOW.md 4.2）───
+    score: int = 0
+    best_rank: int | None = None
+    win_streak: int = 0
+    best_win_streak: int = 0
+    total_rent_collected: int = 0
+    total_rent_paid: int = 0
 
 
 class GameRecordItem(BaseModel):

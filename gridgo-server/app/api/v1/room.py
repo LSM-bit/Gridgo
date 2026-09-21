@@ -29,6 +29,19 @@ async def get_rooms():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.get("/active", response_model=RoomInfo | None)
+async def get_active_room(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取当前用户的活跃房间（无则返回 null）
+
+    供前端刷新 / 重新打开页面时恢复「返回房间」入口，
+    同时作为「同一用户只能有一个活跃房间」的服务端判定依据。
+    """
+    return await RoomService.get_user_active_room(current_user.id, db)
+
+
 @router.post("", response_model=RoomInfo, status_code=status.HTTP_201_CREATED)
 async def create_room(
     body: CreateRoomRequest,
@@ -45,6 +58,7 @@ async def create_room(
             map_id=body.map_id,
             ai_count=body.ai_count,
             ai_difficulty=body.ai_difficulty,
+            password=body.password,
         )
         return room
     except ValueError as e:
@@ -79,7 +93,9 @@ async def join_room(
 ):
     """加入房间（支持观战模式）"""
     try:
-        room = await RoomService.join_room(db, current_user.id, body.code, as_spectator=body.as_spectator)
+        room = await RoomService.join_room(
+            db, current_user.id, body.code, as_spectator=body.as_spectator, password=body.password
+        )
         return room
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -135,10 +151,27 @@ async def update_room_settings(
             map_id=body.map_id,
             ai_count=body.ai_count,
             ai_difficulty=body.ai_difficulty,
+            password=body.password,
+            clear_password=body.clear_password,
         )
         return room
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ─── 文档既有口径的兼容路由（docs/PROJECT.md L793）───
+# 文档声明「修改房间设置 = PUT /rooms/{room_id}/config」，
+# 实现为 PATCH /rooms/{room_id}/settings。为消除不一致，两条路径等价可用。
+
+
+@router.put("/{room_id}/config", response_model=RoomInfo)
+async def update_room_config_alias(
+    room_id: str,
+    body: UpdateRoomRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """更新房间设置（等价于 PATCH /rooms/{room_id}/settings）"""
+    return await update_room_settings(room_id, body, current_user)
 
 
 @router.post("/{room_id}/start", response_model=RoomInfo)

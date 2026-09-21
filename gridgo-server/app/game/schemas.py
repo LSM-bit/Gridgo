@@ -119,6 +119,23 @@ class AuctionState(BaseModel):
     countdown: int = 15  # 倒计时秒数
 
 
+class TradeOffer(BaseModel):
+    """交易报价（对齐 docs/GAME_FLOW.md 9.2 交易系统）
+
+    WS 消息：game.trade_offer / game.trade_accept / game.trade_reject
+            / game.trade_received / game.trade_completed
+    """
+
+    trade_id: str = ""
+    from_id: int = 0  # 发起方 user_id
+    to_id: int = 0  # 接收方 user_id
+    offer_cash: int = 0  # 发起方给出的现金
+    request_cash: int = 0  # 发起方索要的现金
+    offer_properties: list[int] = Field(default_factory=list)  # 发起方给出的地块 position
+    request_properties: list[int] = Field(default_factory=list)  # 发起方索要的地块 position
+    created_turn: int = 0  # 发起时的回合数（用于过期判定）
+
+
 class CardInfo(BaseModel):
     """卡片信息（用于推送）"""
 
@@ -155,6 +172,8 @@ class GameState(BaseModel):
     chance_discard: list[str] = Field(default_factory=list)  # 机会卡弃牌堆
     fate_discard: list[str] = Field(default_factory=list)  # 命运卡弃牌堆
     auction: AuctionState | None = None
+    # ─── 玩家间交易（docs/PROJECT.md 7.2 交易系统） ───
+    pending_trades: list[TradeOffer] = Field(default_factory=list)  # 待处理交易提议
     # ─── 车站/设施租金表（从地图模板复制） ───
     station_rent: dict[int, int] = Field(default_factory=dict)  # {owned_count: rent}
     utility_multiplier: dict[int, int] = Field(default_factory=dict)  # {owned_count: multiplier}

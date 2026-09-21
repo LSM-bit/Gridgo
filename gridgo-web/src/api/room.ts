@@ -38,6 +38,8 @@ export interface RoomInfo {
   players: RoomPlayer[]
   spectators: SpectatorInfo[]
   max_spectators: number
+  /** 是否设置了房间密码（后端 RoomInfo.has_password） */
+  has_password?: boolean
   created_at: string | null
 }
 
@@ -60,6 +62,8 @@ export interface CreateRoomData {
   map_id?: string
   ai_count?: number
   ai_difficulty?: string
+  /** 房间密码（可选，设置后加入房间需提供） */
+  password?: string | null
 }
 
 export interface UpdateRoomData {
@@ -68,6 +72,10 @@ export interface UpdateRoomData {
   map_id?: string
   ai_count?: number
   ai_difficulty?: string
+  /** 房间密码：传值表示设置/修改；配合 clear_password 可清除 */
+  password?: string | null
+  /** 清除房间密码 */
+  clear_password?: boolean
 }
 
 // ─── 地图选项 ───
@@ -91,6 +99,11 @@ export function getRooms() {
   return request.get<any, RoomListItem[]>('/rooms')
 }
 
+/** 获取当前用户所在（活跃）房间；未加入任何房间时返回 null */
+export function getMyRoom() {
+  return request.get<any, RoomInfo | null>('/rooms/active')
+}
+
 /** 创建房间 */
 export function createRoom(data?: CreateRoomData) {
   return request.post<any, RoomInfo>('/rooms', data || {})
@@ -106,9 +119,14 @@ export function getRoom(roomId: string) {
   return request.get<any, RoomInfo>(`/rooms/${roomId}`)
 }
 
-/** 加入房间 */
-export function joinRoom(code: string, asSpectator: boolean = false) {
-  return request.post<any, RoomInfo>('/rooms/join', { code, as_spectator: asSpectator })
+/** 加入房间（密码房需传 password） */
+export function joinRoom(code: string, asSpectator: boolean = false, password?: string) {
+  const body: { code: string; as_spectator: boolean; password?: string } = {
+    code,
+    as_spectator: asSpectator,
+  }
+  if (password) body.password = password
+  return request.post<any, RoomInfo>('/rooms/join', body)
 }
 
 /** 离开房间 */

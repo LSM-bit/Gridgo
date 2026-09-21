@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 import uuid
 from datetime import datetime
 
@@ -29,11 +30,38 @@ from app.game.schemas import (
     GameState,
     PlayerState,
     TileState,
+    TradeOffer,
 )
 from app.game.replay import ReplayRecorder
 from app.services.map import MapService
 
 GAME_TTL = 60 * 60 * 24  # GameState 在 Redis 中的 TTL: 24 小时
+
+# 断线重连档位阈值（秒，docs/GAME_FLOW.md 9）
+RECONNECT_INCREMENT_WINDOW = 30
+RECONNECT_AI_WINDOW = 180
+
+# 拍卖最小加价幅度（docs/GAME_FLOW.md 5.1）
+MIN_BID_INCREMENT = 10
+
+
+def compute_start_price(price: int | None) -> int:
+    """拍卖起拍价 = 购买价 × 50%，最低 1 元（docs/GAME_FLOW.md 5.1）"""
+    return max(1, int((price or 0) * 0.5))
+
+
+def reconnect_mode(elapsed: float | None) -> str:
+    """按离线时长判定重连恢复档位（docs/GAME_FLOW.md 9）
+
+    ≤30s → resume_incremental；30s~3min → resume_snapshot；>3min → left_game
+    """
+    if elapsed is None:
+        return "reconnect"
+    if elapsed <= RECONNECT_INCREMENT_WINDOW:
+        return "resume_incremental"
+    if elapsed <= RECONNECT_AI_WINDOW:
+        return "resume_snapshot"
+    return "left_game"
 
 
 def _player_idx(state: GameState, player_id: int) -> int:
@@ -65,6 +93,16 @@ class GameEngine:
         self._ai_task_running = False  # 防止重复创建 AI 任务
         self._ai_task_ref: asyncio.Task | None = None  # AI 任务引用，防止 GC
         self._replay: ReplayRecorder | None = None  # 对局回放记录器
+        # 拍卖（docs/GAME_FLOW.md 5）：放弃购买 / 破产回收的地产进入拍卖
+        self._auction_queue: list[int] = []  # 待拍卖地块队列
+        self._auction_origin: str = "decline"  # decline=放弃购买 / bankruptcy=破产回收
+        self._ai_auction_task_ref: asyncio.Task | None = None  # AI 竞价任务引用，防止 GC
+        # 结算辅助数据
+        self._turn_logs: list[dict] = []  # 回合日志缓冲（结束时写 game_turn_logs）
+        self._rent_stats: dict[int, dict[str, int]] = {}  # 本局租金流水 {user_id: {collected, paid}}
+        # 断线重连
+        self._ai_substitute: set[int] = set()  # 当前由 AI 代打的玩家
+        self._disconnected_at: dict[int, float] = {}  # 玩家离线时刻 {user_id: monotonic}
 
     # ═══════════════════════════════════════════════════════
     # 游戏初始化
@@ -486,6 +524,12 @@ class GameEngine:
             "is_double": is_double,
         })
 
+        self._log_turn("roll", player_id, {
+            "dice": [d1, d2],
+            "total": d1 + d2,
+            "is_double": is_double,
+        })
+
         await self._save_state()
 
         # 在监狱中的玩家：仅双数可出狱
@@ -752,6 +796,11 @@ class GameEngine:
 
         payer.cash -= amount
         receiver.cash += amount
+
+        # 租金流水（结算时写入 user_stats.total_rent_collected / total_rent_paid）
+        self._add_rent_stat(from_id, paid=amount)
+        self._add_rent_stat(to_id, collected=amount)
+        self._log_turn("pay_rent", from_id, {"to_id": to_id, "amount": amount, "tile_id": tile.position})
 
         # 回放记录：支付租金
         if self._replay:
@@ -1165,6 +1214,507 @@ class GameEngine:
     # ═══════════════════════════════════════════════════════
 
     # ═══════════════════════════════════════════════════════
+    # 回合日志 / 结算辅助
+    # ═══════════════════════════════════════════════════════
+
+    def _log_turn(self, action_type: str, player_id: int, action_data: dict | None = None) -> None:
+        """记录回合操作日志（结束时批量写入 game_turn_logs，docs/GAME_FLOW.md 8.2）"""
+        if not self.state:
+            return
+        dice = self.state.dice
+        dice_values = f"{dice.values[0]},{dice.values[1]}" if dice.values else None
+        self._turn_logs.append(
+            {
+                "turn_number": self.state.turn_number,
+                "player_id": player_id,
+                "action_type": action_type,
+                "action_data": action_data or {},
+                "dice_values": dice_values,
+            }
+        )
+
+    def _add_rent_stat(self, user_id: int, *, collected: int = 0, paid: int = 0) -> None:
+        """累计玩家本局租金流水（用于 user_stats 结算）"""
+        flow = self._rent_stats.setdefault(user_id, {"collected": 0, "paid": 0})
+        flow["collected"] += collected
+        flow["paid"] += paid
+
+    # ═══════════════════════════════════════════════════════
+    # 断线重连（docs/GAME_FLOW.md 9：≤30s 增量恢复 / 30s~3min AI 代打后快照 /
+    #           >3min 判退出，AI 继续代打）
+    # ═══════════════════════════════════════════════════════
+
+    RECONNECT_INCREMENT_WINDOW = RECONNECT_INCREMENT_WINDOW  # 秒（模块级阈值，勿另设数值）
+    RECONNECT_AI_WINDOW = RECONNECT_AI_WINDOW
+
+    async def mark_disconnected(self, player_id: int) -> None:
+        """记录玩家离线时刻（WS 断开时调用）"""
+        if not self.state:
+            return
+        self._disconnected_at[player_id] = time.monotonic()
+
+    async def mark_connected(self, player_id: int) -> str | None:
+        """玩家 WS 重连：复位连接标记、按离线时长决定恢复档位并广播 system.player_reconnected
+
+        Returns:
+            恢复档位（resume_incremental / resume_snapshot / left_game），
+            玩家原本在线（无需广播）时返回 None
+        """
+        async with self._lock:
+            await self.load_state()
+            if not self.state or self.state.phase == GamePhase.GAME_OVER:
+                return None
+            player = self.state.get_player_by_id(player_id)
+            if not player:
+                return None
+
+            disconnected_at = self._disconnected_at.pop(player_id, None)
+            elapsed = time.monotonic() - disconnected_at if disconnected_at else None
+
+            was_offline = (not player.is_connected) or (player_id in self._ai_substitute)
+
+            player.is_connected = True
+            player.consecutive_timeouts = 0
+
+            if elapsed is None:
+                mode = "reconnect"
+            else:
+                mode = reconnect_mode(elapsed)
+
+            if mode != "left_game":
+                self._ai_substitute.discard(player_id)
+
+            # 若当前轮到该玩家且为真人：取消 AI 代打计时器，恢复真人操作计时
+            current = self.state.get_current_player()
+            if (
+                mode != "left_game"
+                and current
+                and current.user_id == player_id
+                and not player.is_ai
+                and self.state.phase == GamePhase.WAIT_ROLL
+            ):
+                self._cancel_timer("roll")
+                self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
+
+            if not was_offline:
+                await self._save_state()
+                return None
+
+            self._log_turn("reconnect", player_id, {
+                "mode": mode,
+                "offline_seconds": int(elapsed or 0),
+            })
+            await self._save_state()
+
+        await ws_manager.broadcast(self.room_id, "system.player_reconnected", {
+            "player_id": player_id,
+            "mode": mode,
+            "offline_seconds": int(elapsed or 0),
+        })
+        return mode
+
+    # ═══════════════════════════════════════════════════════
+    # 拍卖（docs/GAME_FLOW.md 5：放弃购买 / 破产回收地块进入拍卖）
+    # ═══════════════════════════════════════════════════════
+
+    MIN_BID_INCREMENT = MIN_BID_INCREMENT  # docs/GAME_FLOW.md 5：最低加价 10
+
+    def _eligible_bidders(self, exclude_id: int | None = None) -> list[int]:
+        """可参与拍卖的玩家（未破产，且非被排除者）"""
+        if not self.state:
+            return []
+        return [
+            p.user_id
+            for p in self.state.players
+            if not p.is_bankrupt and p.user_id != exclude_id
+        ]
+
+    async def _start_auction(self, tile_position: int, origin: str = "decline") -> bool:
+        """发起拍卖
+
+        docs/GAME_FLOW.md 5.1：起拍价 = 购买价 × 50%；无人出价则地块保持无主。
+        """
+        if not self.state:
+            return False
+
+        tile = self.state.get_tile(tile_position)
+        if tile.owner_id is not None:
+            return False
+
+        bidders = self._eligible_bidders()
+        if not bidders:
+            return False
+
+        start_price = compute_start_price(tile.price)
+        self._auction_origin = origin
+        self.state.auction = AuctionState(
+            tile_position=tile_position,
+            start_price=start_price,
+            current_bid=start_price,
+            current_bidder_id=None,
+            bidders=bidders,
+            countdown=15,
+        )
+        self.state.phase = GamePhase.AUCTION
+        await self._save_state()
+
+        self._log_turn("auction_start", 0, {
+            "tile_id": tile_position,
+            "tile_name": tile.name,
+            "start_price": start_price,
+        })
+
+        await ws_manager.broadcast(self.room_id, "game.auction_start", {
+            "tile_id": tile_position,
+            "tile_name": tile.name,
+            "start_price": start_price,
+            "min_increment": self.MIN_BID_INCREMENT,
+            "bidders": bidders,
+            "countdown": 15,
+        })
+
+        self._cancel_timer("auction")
+        self._start_timer("auction", 15, self._on_auction_timeout)
+        self._schedule_ai_auction_bid()
+        return True
+
+    def _schedule_ai_auction_bid(self) -> None:
+        """调度 AI 竞价任务（AI 会在 1~2 秒后按难度决定是否出价）"""
+        if not self.state or not self.state.auction:
+            return
+        try:
+            task = asyncio.create_task(self._ai_auction_bid())
+            self._ai_auction_task_ref = task
+        except RuntimeError:  # 无事件循环（单元测试同步调用）
+            pass
+
+    async def _ai_auction_bid(self) -> None:
+        """AI 竞价循环：按难度在起拍价/当前价基础上加价，直到放弃"""
+        if not self.state or not self.state.auction:
+            return
+        await asyncio.sleep(random.uniform(1.0, 2.0))
+
+        async with self._lock:
+            await self.load_state()
+            if not self.state or not self.state.auction:
+                return
+            auction = self.state.auction
+
+            candidates = [
+                self.state.get_player_by_id(uid)
+                for uid in auction.bidders
+                if uid != auction.current_bidder_id
+            ]
+            candidates = [p for p in candidates if p and p.is_ai and not p.is_bankrupt]
+            if not candidates:
+                return
+
+            player = random.choice(candidates)
+            tile = self.state.get_tile(auction.tile_position)
+            price = tile.price or auction.start_price
+
+            # 各难度出价上限（docs/GAME_FLOW.md 5.3 AI 拍卖策略）
+            ratio = {"easy": 0.8, "medium": 1.0, "hard": 1.3}.get(player.ai_difficulty or "easy", 0.8)
+            max_amount = int(price * ratio)
+
+            next_amount = (
+                auction.start_price
+                if auction.current_bidder_id is None
+                else auction.current_bid + self.MIN_BID_INCREMENT
+            )
+            # easy 难度存在一定放弃概率
+            give_up = player.ai_difficulty == "easy" and random.random() < 0.5
+
+            if give_up or next_amount > max_amount or player.cash < next_amount:
+                # 该 AI 放弃本轮竞价
+                auction.bidders = [uid for uid in auction.bidders if uid != player.user_id]
+                await self._save_state()
+                self._schedule_ai_auction_bid()
+                return
+
+            auction.current_bid = next_amount
+            auction.current_bidder_id = player.user_id
+
+            if self._replay:
+                idx = _player_idx(self.state, player.user_id)
+                self._replay.record_auction_bid(self.state.turn_number, idx, next_amount)
+
+            self._cancel_timer("auction")
+            self._start_timer("auction", 15, self._on_auction_timeout)
+
+            await ws_manager.broadcast(self.room_id, "game.auction_update", {
+                "tile_id": auction.tile_position,
+                "current_bid": next_amount,
+                "bidder_id": player.user_id,
+                "min_increment": self.MIN_BID_INCREMENT,
+            })
+            await self._save_state()
+
+        self._schedule_ai_auction_bid()
+
+    async def _finish_auction(self) -> None:
+        """结束当前拍卖并结算（有队列则继续下一场）"""
+        if not self.state or not self.state.auction:
+            return
+
+        auction = self.state.auction
+        tile = self.state.get_tile(auction.tile_position)
+        winner_id = auction.current_bidder_id
+
+        if winner_id:
+            winner = self.state.get_player_by_id(winner_id)
+            if winner and winner.cash >= auction.current_bid:
+                winner.cash -= auction.current_bid
+                tile.owner_id = winner_id
+                if auction.tile_position not in winner.properties:
+                    winner.properties.append(auction.tile_position)
+
+                self._log_turn("auction_end", winner_id, {
+                    "tile_id": auction.tile_position,
+                    "final_price": auction.current_bid,
+                })
+                await ws_manager.broadcast(self.room_id, "game.auction_end", {
+                    "tile_id": auction.tile_position,
+                    "winner_id": winner_id,
+                    "final_price": auction.current_bid,
+                    "start_price": auction.start_price,
+                })
+            else:
+                winner_id = None
+
+        if not winner_id:
+            self._log_turn("auction_end", 0, {
+                "tile_id": auction.tile_position,
+                "final_price": 0,
+            })
+            await ws_manager.broadcast(self.room_id, "game.auction_end", {
+                "tile_id": auction.tile_position,
+                "winner_id": None,
+                "final_price": 0,
+                "start_price": auction.start_price,
+            })
+
+        self.state.auction = None
+        await self._save_state()
+
+        # 队列中还有待拍卖地块 → 继续下一场
+        if self._auction_queue and self.state.phase != GamePhase.GAME_OVER:
+            next_pos = self._auction_queue.pop(0)
+            if await self._start_auction(next_pos, origin=self._auction_origin):
+                return
+
+        origin = self._auction_origin
+        self._auction_origin = "decline"
+        self.state.phase = GamePhase.FREE_ACTION
+        await self._save_state()
+
+        if origin == "bankruptcy":
+            # 破产回收拍卖结束后仍归属当前回合流程
+            current = self.state.get_current_player()
+            await self._on_enter_free_action(current.user_id)
+        else:
+            current = self.state.get_current_player()
+            await self._on_enter_free_action(current.user_id)
+
+    # ═══════════════════════════════════════════════════════
+    # 玩家间交易（docs/PROJECT.md 7.2：game.trade_offer/accept/reject）
+    # ═══════════════════════════════════════════════════════
+
+    async def offer_trade(self, player_id: int, payload: dict) -> None:
+        """发起交易（公开接口，带锁）"""
+        async with self._lock:
+            await self.load_state()
+            await self._do_offer_trade(player_id, payload)
+
+    async def _do_offer_trade(self, player_id: int, payload: dict) -> None:
+        """发起交易（内部实现，无锁）
+
+        payload: {target_id, offer: {cash, properties}, request: {cash, properties}}
+        """
+        if not self.state or self.state.phase == GamePhase.GAME_OVER:
+            return
+
+        target_id = payload.get("target_id")
+        if target_id is None:
+            return
+        target_id = int(target_id)
+
+        sender = self.state.get_player_by_id(player_id)
+        target = self.state.get_player_by_id(target_id)
+        if not sender or not target or sender.is_bankrupt or target.is_bankrupt:
+            return
+        if player_id == target_id:
+            return
+
+        offer = payload.get("offer") or {}
+        request = payload.get("request") or {}
+        offer_cash = max(0, int(offer.get("cash") or 0))
+        request_cash = max(0, int(request.get("cash") or 0))
+        offer_props = [int(p) for p in (offer.get("properties") or [])]
+        request_props = [int(p) for p in (request.get("properties") or [])]
+
+        # 校验现金与地产归属
+        if sender.cash < offer_cash or target.cash < request_cash:
+            return
+        if any(self.state.get_tile(p).owner_id != player_id for p in offer_props):
+            return
+        if any(self.state.get_tile(p).owner_id != target_id for p in request_props):
+            return
+
+        trade = TradeOffer(
+            trade_id=uuid.uuid4().hex[:12],
+            from_id=player_id,
+            to_id=target_id,
+            offer_cash=offer_cash,
+            request_cash=request_cash,
+            offer_properties=offer_props,
+            request_properties=request_props,
+            created_turn=self.state.turn_number,
+        )
+        # 同一接收方的旧提议先失效
+        self.state.pending_trades = [
+            t for t in self.state.pending_trades if t.to_id != target_id or t.from_id != player_id
+        ]
+        self.state.pending_trades.append(trade)
+
+        self._log_turn("trade_offer", player_id, {
+            "trade_id": trade.trade_id,
+            "target_id": target_id,
+        })
+        await self._save_state()
+
+        await ws_manager.broadcast(self.room_id, "game.trade_offer", {
+            "trade_id": trade.trade_id,
+            "from_id": player_id,
+            "to_id": target_id,
+            "offer": trade.model_dump(),
+        })
+        await ws_manager.send_to_player(self.room_id, target_id, "game.trade_received", {
+            "trade_id": trade.trade_id,
+            "from_id": player_id,
+            "offer": trade.model_dump(),
+        })
+
+    async def accept_trade(self, player_id: int, trade_id: str) -> None:
+        """接受交易（公开接口，带锁）"""
+        async with self._lock:
+            await self.load_state()
+            await self._do_accept_trade(player_id, trade_id)
+
+    async def _do_accept_trade(self, player_id: int, trade_id: str) -> None:
+        """接受交易（内部实现，无锁）"""
+        if not self.state:
+            return
+
+        trade = next(
+            (t for t in self.state.pending_trades if t.trade_id == trade_id), None
+        )
+        if not trade or trade.to_id != player_id:
+            return
+
+        sender = self.state.get_player_by_id(trade.from_id)
+        target = self.state.get_player_by_id(player_id)
+        if not sender or not target:
+            return
+
+        # 二次校验资金与地产归属（提议可能已过期）
+        if sender.cash < trade.offer_cash or target.cash < trade.request_cash:
+            self._reject_trade_internal(trade, reason="insufficient_cash")
+            return
+        if any(self.state.get_tile(p).owner_id != trade.from_id for p in trade.offer_properties):
+            self._reject_trade_internal(trade, reason="property_changed")
+            return
+        if any(self.state.get_tile(p).owner_id != trade.to_id for p in trade.request_properties):
+            self._reject_trade_internal(trade, reason="property_changed")
+            return
+
+        # 现金转移
+        sender.cash -= trade.offer_cash
+        target.cash += trade.offer_cash
+        target.cash -= trade.request_cash
+        sender.cash += trade.request_cash
+
+        # 地产转移
+        for pos in trade.offer_properties:
+            tile = self.state.get_tile(pos)
+            tile.owner_id = trade.to_id
+            if pos in sender.properties:
+                sender.properties.remove(pos)
+            if pos not in target.properties:
+                target.properties.append(pos)
+        for pos in trade.request_properties:
+            tile = self.state.get_tile(pos)
+            tile.owner_id = trade.from_id
+            if pos in target.properties:
+                target.properties.remove(pos)
+            if pos not in sender.properties:
+                sender.properties.append(pos)
+
+        self.state.pending_trades = [
+            t for t in self.state.pending_trades if t.trade_id != trade_id
+        ]
+
+        self._log_turn("trade_accept", player_id, {"trade_id": trade_id})
+        await self._save_state()
+
+        payload = {
+            "trade_id": trade_id,
+            "from_id": trade.from_id,
+            "to_id": trade.to_id,
+            "offer": trade.model_dump(),
+            "cash": {str(trade.from_id): sender.cash, str(trade.to_id): target.cash},
+        }
+        await ws_manager.broadcast(self.room_id, "game.trade_completed", payload)
+        await ws_manager.broadcast(self.room_id, "game.trade_accept", {
+            "trade_id": trade_id,
+            "from_id": trade.from_id,
+            "to_id": trade.to_id,
+        })
+
+    async def reject_trade(self, player_id: int, trade_id: str) -> None:
+        """拒绝交易（公开接口，带锁）"""
+        async with self._lock:
+            await self.load_state()
+            await self._do_reject_trade(player_id, trade_id)
+
+    async def _do_reject_trade(self, player_id: int, trade_id: str) -> None:
+        """拒绝交易（内部实现，无锁）"""
+        if not self.state:
+            return
+        trade = next(
+            (t for t in self.state.pending_trades if t.trade_id == trade_id), None
+        )
+        # 接收方可拒绝，发起方可撤回
+        if not trade or player_id not in (trade.to_id, trade.from_id):
+            return
+        self._reject_trade_internal(trade, reason="rejected")
+
+    def _reject_trade_internal(self, trade: TradeOffer, reason: str = "rejected") -> None:
+        """移除交易提议并异步广播（内部实现，无锁/无 await）"""
+        if not self.state:
+            return
+        self.state.pending_trades = [
+            t for t in self.state.pending_trades if t.trade_id != trade.trade_id
+        ]
+        self._log_turn("trade_reject", trade.to_id, {
+            "trade_id": trade.trade_id,
+            "reason": reason,
+        })
+        try:
+            asyncio.create_task(self._broadcast_trade_reject(trade, reason))
+        except RuntimeError:
+            pass
+
+    async def _broadcast_trade_reject(self, trade: TradeOffer, reason: str) -> None:
+        await self._save_state()
+        await ws_manager.broadcast(self.room_id, "game.trade_reject", {
+            "trade_id": trade.trade_id,
+            "from_id": trade.from_id,
+            "to_id": trade.to_id,
+            "reason": reason,
+        })
+
+    # ═══════════════════════════════════════════════════════
     # 玩家操作（公开方法 + 内部实现）
     # ═══════════════════════════════════════════════════════
 
@@ -1211,6 +1761,7 @@ class GameEngine:
             "price": tile.price,
             "cash": player.cash,
         })
+        self._log_turn("buy", player_id, {"tile_id": tile_position, "price": tile.price})
 
         # 进入自由行动
         self.state.phase = GamePhase.FREE_ACTION
@@ -1280,7 +1831,15 @@ class GameEngine:
             "tile_id": tile_position,
         })
 
-        # 进入自由行动
+        self._log_turn("decline", player_id, {"tile_id": tile_position})
+
+        # docs/GAME_FLOW.md 5：放弃购买后进入拍卖，无人出价则地块保持无主
+        self.state.phase = GamePhase.AUCTION
+        await self._save_state()
+        if await self._start_auction(tile_position, origin="decline"):
+            return
+
+        # 无有效竞拍者（全部破产）时直接进入自由行动
         self.state.phase = GamePhase.FREE_ACTION
         await self._save_state()
         await self._on_enter_free_action(player_id)
@@ -1295,7 +1854,13 @@ class GameEngine:
             auction = self.state.auction
             if player_id not in auction.bidders:
                 return
-            if amount <= auction.current_bid:
+            # docs/GAME_FLOW.md 5：首次出价不低于起拍价，之后每次 ≥ 当前价 + 最低加价
+            min_amount = (
+                auction.start_price
+                if auction.current_bidder_id is None
+                else auction.current_bid + self.MIN_BID_INCREMENT
+            )
+            if amount < min_amount:
                 return
 
             player = self.state.get_player_by_id(player_id)
@@ -1318,9 +1883,11 @@ class GameEngine:
                 "tile_id": auction.tile_position,
                 "current_bid": amount,
                 "bidder_id": player_id,
+                "min_increment": self.MIN_BID_INCREMENT,
             })
 
             await self._save_state()
+            self._schedule_ai_auction_bid()
 
     # --- 建造房屋 ---
 
@@ -1369,6 +1936,11 @@ class GameEngine:
             "level": tile.build_level,
             "cost": tile.build_cost,
             "cash": player.cash,
+        })
+        self._log_turn("build", player_id, {
+            "tile_id": tile_position,
+            "level": tile.build_level,
+            "cost": tile.build_cost,
         })
 
         await self._save_state()
@@ -1744,6 +2316,19 @@ class GameEngine:
         # 保存对局记录到数据库（先保存以获取 record_id）
         game_record_id = await self._save_game_record(reason, ranking_data, winner_id)
 
+        # docs/GAME_FLOW.md 4.2：结算写入 user_stats（胜者 +30 / 败者 -10 / 破产 +1）
+        try:
+            from app.services.stats import StatsService
+
+            await StatsService.apply_game_settlement(
+                ranking_data,
+                winner_id=winner_id,
+                end_reason=reason.value,
+                rent_stats=self._rent_stats,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).error(f"[UserStats] Failed to apply settlement: {e}")
+
         await ws_manager.broadcast(self.room_id, "game.over", {
             "end_reason": reason.value,
             "winner_id": winner_id,
@@ -1820,6 +2405,22 @@ class GameEngine:
                                 break
                         db.add(gp)
 
+                    # 写入逐回合操作日志（docs/PROJECT.md 8.2 / GAME_FLOW.md 8.2）
+                    if self._turn_logs:
+                        from app.models.stats import GameTurnLog
+
+                        for log in self._turn_logs:
+                            db.add(
+                                GameTurnLog(
+                                    game_id=record.id,
+                                    turn_number=int(log.get("turn_number") or 0),
+                                    player_id=int(log.get("player_id") or 0),
+                                    action_type=str(log.get("action_type") or "unknown"),
+                                    action_data=log.get("action_data") or {},
+                                    dice_values=log.get("dice_values"),
+                                )
+                            )
+
                     await db.commit()
                     logging.getLogger(__name__).info(f"[GameRecord] Saved game record {record.id} for room {self.room_id}")
                     return record.id
@@ -1868,11 +2469,15 @@ class GameEngine:
             return
         player.consecutive_timeouts += 1
         if player.consecutive_timeouts >= 3:
-            # 标记断线
+            # 标记断线（docs/GAME_FLOW.md 9：连续 3 次超时视为离线，由 AI 代打）
             player.is_connected = False
+            self._ai_substitute.add(player.user_id)
+            self._disconnected_at.setdefault(player.user_id, time.monotonic())
             await ws_manager.broadcast(self.room_id, "system.player_disconnected", {
                 "player_id": player.user_id,
+                "mode": "ai_substitute",
             })
+            self._log_turn("disconnect", player.user_id, {"mode": "ai_substitute"})
             # AI 暂代
             self._start_ai_task(self._ai_turn_loop(player))
         else:
@@ -1894,40 +2499,15 @@ class GameEngine:
         await self._end_turn()
 
     async def _on_auction_timeout(self) -> None:
-        """拍卖超时 → 结束拍卖"""
+        """拍卖超时 → 结束拍卖并按规则结算（docs/GAME_FLOW.md 5.2）"""
         if not self.state or not self.state.auction:
             return
-
-        auction = self.state.auction
-        tile = self.state.get_tile(auction.tile_position)
-
-        if auction.current_bidder_id:
-            # 有人出价
-            winner = self.state.get_player_by_id(auction.current_bidder_id)
-            if winner and winner.cash >= auction.current_bid:
-                winner.cash -= auction.current_bid
-                tile.owner_id = auction.current_bidder_id
-                winner.properties.append(auction.tile_position)
-
-                await ws_manager.broadcast(self.room_id, "game.auction_end", {
-                    "tile_id": auction.tile_position,
-                    "winner_id": auction.current_bidder_id,
-                    "final_price": auction.current_bid,
-                })
-        else:
-            # 无人出价
-            await ws_manager.broadcast(self.room_id, "game.auction_end", {
-                "tile_id": auction.tile_position,
-                "winner_id": None,
-                "final_price": 0,
-            })
-
-        self.state.auction = None
-        self.state.phase = GamePhase.FREE_ACTION
-        await self._save_state()
-
-        current = self.state.get_current_player()
-        await self._on_enter_free_action(current.user_id)
+        async with self._lock:
+            await self.load_state()
+            if not self.state or not self.state.auction:
+                return
+            self._cancel_timer("auction")
+            await self._finish_auction()
 
     # ═══════════════════════════════════════════════════════
     # 快照

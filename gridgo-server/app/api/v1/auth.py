@@ -3,11 +3,12 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.security import decode_token
+from app.core.security import decode_token, get_password_hash, verify_password
 from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
@@ -17,6 +18,7 @@ from app.schemas.auth import (
     TokenData,
     UserInfo,
 )
+from app.schemas.user import ChangePasswordRequest, UpdateProfileRequest
 from app.services.auth import AuthService, _build_user_info
 from app.services.token import blacklist_token, remove_refresh_token_on_logout
 

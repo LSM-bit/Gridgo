@@ -1,1173 +1,677 @@
-# GridGo - 项目文档
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: ee1a9111a266e63ab5b365271262c0db_b28c3db9b58511f19ef152540024e231
+    ReservedCode1: 4J3bgVMVgSFJWYk/RHyf+EPkdD76Aebo4PXoQltUYil+Kjg331S3g37941ORBpi4oKyuQKIxm2m+4/PKNOVBDPvzb4m5vA+y+F8jbMelLotEEQVDcP1W+xtAeT8QGcqxgVPLJ/Ge3tPFmHdaXvvLkz56xLOTUWtPdl5uZ0DeYXLGEZHcuUMCY6A8hcw=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: ee1a9111a266e63ab5b365271262c0db_b28c3db9b58511f19ef152540024e231
+    ReservedCode2: 4J3bgVMVgSFJWYk/RHyf+EPkdD76Aebo4PXoQltUYil+Kjg331S3g37941ORBpi4oKyuQKIxm2m+4/PKNOVBDPvzb4m5vA+y+F8jbMelLotEEQVDcP1W+xtAeT8QGcqxgVPLJ/Ge3tPFmHdaXvvLkz56xLOTUWtPdl5uZ0DeYXLGEZHcuUMCY6A8hcw=
+---
 
-> 版本：v1.0
-> 更新日期：2026-07-10
-> 技术选型详见：[TECH_STACK.md](./TECH_STACK.md)
+# GridGo 项目文档
+
+> **版本口径**：统一使用 `APP_VERSION = "0.1.0"`（见 `gridgo-server/app/core/config.py`），全文不再出现 V1.0 / V1.5 / V2.0 等历史版本号。
+> **最后更新**：2026-09-21
+> **唯一依据**：本文档中的目录结构、接口路径、字段名、WS 消息类型、数据库表结构均逐项取自 `gridgo-server` / `gridgo-web` 当前源码；凡与代码冲突处，一律以代码为准。
 
 ---
 
 ## 目录
 
-- [一、项目简介](#一项目简介)
-- [二、角色定义](#二角色定义)
-- [三、游戏设计](#三游戏设计)
-  - [3.1 棋盘设计](#31-棋盘设计)
-  - [3.2 地块系统](#32-地块系统)
-  - [3.3 核心规则](#33-核心规则)
-  - [3.4 卡片事件系统](#34-卡片事件系统)
-  - [3.5 道具系统](#35-道具系统)
-  - [3.6 AI 人机系统](#36-ai-人机系统)
-- [四、功能需求](#四功能需求)
-- [五、游戏流程](#五游戏流程)
-- [六、数据模型设计](#六数据模型设计)
-- [七、API 接口设计](#七api-接口设计)
-- [八、前端页面设计](#八前端页面设计)
-- [九、非功能需求](#九非功能需求)
-- [十、开发规范](#十开发规范)
+- [一、项目概述](#一项目概述)
+- [二、功能清单（已实现 / 规划中）](#二功能清单已实现--规划中)
+- [三、系统架构](#三系统架构)
+- [四、目录结构](#四目录结构)
+- [五、REST API 路径表](#五rest-api-路径表)
+- [六、WebSocket 协议](#六websocket-协议)
+- [七、数据库设计](#七数据库设计)
+- [八、枚举与字段口径](#八枚举与字段口径)
+- [九、环境变量](#九环境变量)
+- [十、运行与部署](#十运行与部署)
+- [十一、测试](#十一测试)
+- [十二、已知限制与规划项](#十二已知限制与规划项)
 
 ---
 
-## 一、项目简介
+## 一、项目概述
 
-### 1.1 项目背景
-
-GridGo 是一款基于 Web 的在线大富翁（Monopoly）棋盘游戏。玩家通过掷骰子在棋盘上移动，购买地产、收取租金、使用道具和触发随机事件，最终通过策略和运气击败对手。
-
-### 1.2 项目目标
-
-| 目标 | 描述 |
+| 项目 | 说明 |
 |------|------|
-| 核心目标 | 实现完整的大富翁游戏体验，支持在线多人实时联机 |
-| 玩家规模 | 单房间 1-8 名玩家（含 AI 人机） |
-| 平台 | Web 浏览器（PC 优先，适配移动端） |
-| 用户体验 | 低延迟实时同步、流畅动画、断线重连无缝恢复 |
-
-### 1.3 游戏模式
-
-| 模式 | 说明 | 适用场景 |
-|------|------|----------|
-| 在线多人 | 1-8 名真人玩家实时联机对战 | 好友组局、匹配随机对手 |
-| 单人 vs AI | 1 名真人玩家 + 1-7 名 AI 对战 | 练习、休闲体验 |
-| 混合模式 | 真人 + AI 混合对战（房主可添加 AI 补位） | 好友不足时补位 |
-
-### 1.4 术语表
-
-| 术语 | 含义 |
-|------|------|
-| 回合 (Turn) | 一名玩家的一次完整操作周期 |
-| 地块 (Tile) | 棋盘上的一个格子 |
-| 地产 (Property) | 可购买的地块 |
-| 租金 (Rent) | 其他玩家经过地产时需支付的费用 |
-| 地契 (Deed) | 地产的拥有权证明 |
-| 升级 (Upgrade) | 在地产上建造房屋/酒店，提高租金 |
-| 破产 (Bankruptcy) | 玩家资产为负且无法偿还债务，被淘汰 |
-| 起始资金 | 游戏开始时每位玩家分配的初始现金 |
-| 过路费 | 经过起点时获得的奖励金 |
-| 垄断 (Monopoly) | 拥有同一分组的全部地产 |
+| 项目名称 | GridGo（大富翁） |
+| 应用版本 | `0.1.0` |
+| 项目类型 | 前后端分离的 Web 在线棋盘游戏 |
+| 核心玩法 | 掷骰子、买地、收租、建造升级、抵押赎回、拍卖、事件卡、玩家交易 |
+| 游戏模式 | 在线多人实时联机（REST + WebSocket），支持 AI 人机混战与观战 |
+| 玩家规模 | 单房 1-8 人（`max_players` 默认 8，`GAME_MAX_PLAYERS=8`），AI 难度 easy / medium / hard |
+| 单局上限 | `GAME_MAX_TURNS=100` 回合 |
+| 部署方式 | 本地开发（venv + pnpm）与 Docker Compose（postgres / redis / server / web）双形态 |
 
 ---
 
-## 二、角色定义
+## 二、功能清单（已实现 / 规划中）
 
-### 2.1 玩家角色
+> 判定标准：**已实现** = 代码中存在对应路由/服务/模型且接线完成；**规划中** = 代码中不存在实现（或仅存在数据表/依赖而无调用链）。
 
-| 角色 | 权限 | 说明 |
-|------|------|------|
-| 游客 | 浏览大厅、查看排行榜 | 未登录用户 |
-| 注册用户 | 创建/加入房间、游戏对战、查看历史记录 | 已登录用户 |
-| 房主 | 创建房间、配置规则、踢人、添加 AI、开始游戏 | 房间创建者 |
-| AI 玩家 | 自动操作 | 由服务器控制的虚拟玩家 |
+### 2.1 账号与用户（已实现）
 
-### 2.2 玩家在局内状态
+| 功能 | 状态 | 实现位置 |
+|------|:----:|----------|
+| 注册 / 登录 / 刷新 Token / 登出 / 当前用户 | 已实现 | `app/api/v1/auth.py`、`app/services/auth.py`、`app/services/token.py` |
+| 个人资料查询与修改、修改密码 | 已实现 | `app/api/v1/user.py` |
+| 我的统计 / 我的对局 / 他人统计与对局 / 单局详情 | 已实现 | `app/api/v1/user.py`、`app/services/stats.py` |
+| 好友列表 / 好友申请（发起、列表、同意拒绝、删除） | 已实现 | `app/api/v1/friend.py`、`app/services/friends.py` |
+| 排行榜（按 `user_stats.score` 排序，分页） | 已实现 | `app/api/v1/leaderboard.py` |
 
-| 状态 | 说明 |
-|------|------|
-| 等待中 | 在房间等待游戏开始 |
-| 行动中 | 当前回合，可进行操作 |
-| 等待回合 | 等待其他玩家完成回合 |
-| 断线中 | 连接断开，AI 暂代操作 |
-| 破产 | 资不抵债，已被淘汰，可观战 |
-| 观战中 | 被淘汰后旁观剩余对局 |
+### 2.2 房间（已实现）
+
+| 功能 | 状态 | 说明 |
+|------|:----:|------|
+| 创建房间 / 房间列表 / 房间详情 | 已实现 | 房间状态以内存 + Redis 为运行权威源，`rooms` 表为写穿透镜像 |
+| 6 位房间码查询（`/rooms/by-code/{code}`） | 已实现 | 房间码 `room_code` 唯一 |
+| 加入（支持房号、密码校验）/ 离开 | 已实现 | 房主离开销毁房间 |
+| 准备 / 取消准备 | 已实现 | 房主无需准备 |
+| 切换角色（玩家 ↔ 观战者） | 已实现 | `is_spectator` 落库于 `room_players` |
+| 房间设置（`PATCH /settings`，`PUT /config` 为兼容别名） | 已实现 | 同一 `UpdateRoomRequest` 模型 |
+| 开始游戏（校验人数与准备状态） | 已实现 | 触发 `GameService.init_game` |
+| 房间重置（回到等待态） | 已实现 | |
+
+### 2.3 对局与回放（已实现）
+
+| 功能 | 状态 | 说明 |
+|------|:----:|------|
+| 对局信息 / 完整状态（调试用）/ 对局日志 | 已实现 | `app/api/v1/game.py` |
+| 投降结束对局 | 已实现 | `POST /games/{room_id}/surrender` |
+| 回放数据获取（`GET /games/replay/{game_id}`） | 已实现 | `actions` 为压缩编码操作序列，见 `app/game/replay.py` |
+| 用户历史对局 | 已实现 | `GET /games/history/{user_id}` |
+
+### 2.4 游戏引擎（已实现）
+
+| 功能 | 状态 | 说明 |
+|------|:----:|------|
+| 掷骰 / 双数再掷 / 连续 3 次双数入狱（speed_trap） | 已实现 | `app/game/engine.py` |
+| 移动与经过起点奖励（`GAME_PASS_GO_BONUS=200`） | 已实现 | `game.pass_go` 单播给该玩家 |
+| 地块效果：买地 / 放弃购买 / 跳过 | 已实现 | PROPERTY / STATION / UTILITY |
+| 租金计算（垄断同组 ×2、车站按持有数、设施按骰子倍率） | 已实现 | `GameState.calculate_rent` |
+| 拍卖（起拍、竞价、倒计时、成交/流拍） | 已实现 | `AuctionState`、`game.auction_*` 消息 |
+| 建造 / 拆除 / 抵押 / 赎回 | 已实现 | 等级 0-5（`max_build_level=5`） |
+| 税收格（固定额与百分比两种） | 已实现 | `tax_amount` / `tax_is_percent` |
+| 机会卡 10 张（C01-C10）、命运卡 10 张（F01-F10） | 已实现 | 卡片数据见 `scripts/seed_classic_map.py`，效果见 `_execute_card_effect` |
+| 监狱（保释金 50 / 免罪卡 / 双数出狱 / 回合数） | 已实现 | `jail_bail=50` |
+| 破产判定、对局结算与统计更新 | 已实现 | `game.player_bankrupt`、`game.over`；破产为**直接出局结算**，无变卖资产自救流程 |
+| 玩家间交易（现金 + 地块的报价、接受、拒绝、过期） | 已实现 | `TradeOffer`、`pending_trades` |
+| 回合超时（`GAME_TURN_TIMEOUT=30` 秒）与超时自动动作 | 已实现 | engine 内部 asyncio 定时器 |
+| AI 三种难度（EasyAI / MediumAI / HardAI） | 已实现 | `app/game/ai/player.py`、`AIPlayerFactory` |
+| 断线重连（玩家连接/离线标记、重连恢复） | 已实现 | `system.player_reconnected` 等消息 |
+| 对局结束原因：last_standing / turn_limit | 已实现 | `EndReason` 枚举；`vote_end` 仅枚举预留，当前无触发入口 |
+
+### 2.5 实时通信（已实现）
+
+| 功能 | 状态 | 说明 |
+|------|:----:|------|
+| 游戏 WebSocket（玩家与观战者共用端点） | 已实现 | `ws://<host>/ws/game?token=<access_token>` |
+| 心跳（客户端 `system.ping` → 服务端 `system.pong`） | 已实现 | 单播回复，非广播 |
+| 观战者只读限制（16 类操作被拦截） | 已实现 | `SPECTATOR_BLOCKED_TYPES` |
+| 聊天（REST 拉取/发送 + WS 实时 `chat.send` / `chat.message`） | 已实现 | WS 发送后广播 `chat.message` |
+
+### 2.6 前端（已实现）
+
+| 功能 | 状态 | 说明 |
+|------|:----:|------|
+| 9 个页面（Home / Room / Game / Login / Register / Profile / Friends / Leaderboard / Replay） | 已实现 | `gridgo-web/src/pages` |
+| Canvas 棋盘渲染 + GSAP 动画 | 已实现 | `src/game/renderer.ts`、`src/game/animations.ts` |
+| Pinia 状态管理（user / room / game / replay） | 已实现 | `src/stores` |
+| Element Plus + UnoCSS 界面体系 | 已实现 | `main.ts` 全量注册 Element Plus |
+| 回放播放页（基于 `replayEngine.ts`） | 已实现 | `src/pages/Replay.vue` |
+| 音效播放 | 规划中 | `howler` 依赖已安装，但 `src` 内无实际调用与音频资源 |
+| 道具系统、赛季/段位、成就体系 | 规划中 | 后端无对应模型与接口 |
+| 多地图拓展（city / island 等） | 规划中 | 表结构与 `map_id` 链路已就绪，当前仅内置 `classic` 一张地图数据（`scripts/seed_classic_map.py`），其余地图 ID 仅出现在模型注释示例中 |
 
 ---
 
-## 三、游戏设计
-
-### 3.1 棋盘设计
-
-棋盘为 **11×11 的方形环状棋盘**，共 **40 个地块**，沿外圈排列。
+## 三、系统架构
 
 ```
-┌────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┐
-│ 00 │ 01 │ 02 │ 03 │ 04 │ 05 │ 06 │ 07 │ 08 │ 09 │ 10 │
-├────┼────┴────┴────┴────┴────┴────┴────┴────┴────┼────┤
-│ 39 │                                         │ 11 │
-├────┤                                         ├────┤
-│ 38 │              中心区域                    │ 12 │
-│    │         (事件卡 / 信息展示)              │    │
-├────┤                                         ├────┤
-│ 37 │                                         │ 13 │
-├────┼────┬────┬────┬────┬────┬────┬────┬────┼────┤
-│ 36 │ 35 │ 34 │ 33 │ 32 │ 31 │ 30 │ 29 │ 28 │ 27 │ 26 │
-└────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     浏览器（Vue 3 SPA）                       │
+│   Canvas 2D 棋盘渲染 · Pinia 状态 · Axios(REST) · WS 客户端    │
+└───────────────┬──────────────────────────────┬───────────────┘
+                │ /api/**                      │ /ws/game
+        ┌───────▼────────┐             ┌───────▼────────┐
+        │ 本地：Vite 3000 │             │ 同左（proxy ws）│
+        │ 容器：Nginx 80  │             │                │
+        └───────┬────────┘             └───────┬────────┘
+                │ 反向代理 /api、/ws            │
+        ┌───────▼──────────────────────────────▼────────┐
+        │        FastAPI（uvicorn，端口 8001）            │
+        │  api/v1（REST）   api/ws（WebSocket）          │
+        │  services（业务） game（引擎/AI/回放）          │
+        └───────┬──────────────────────────────┬────────┘
+                │ SQLAlchemy 2.0 (asyncpg)     │ redis-py (async)
+        ┌───────▼────────┐             ┌───────▼────────┐
+        │ PostgreSQL 16  │             │  Redis 7.x     │
+        │  5432 / 3307   │             │  6379 / 6380   │
+        │  持久化存储      │             │ 运行时房间与对局状态 │
+        └────────────────┘             └────────────────┘
 ```
 
-- **起点 (Tile 0)**：每次经过获得过路费
-- **角落 (Tile 0, 10, 20, 30)**：特殊功能地块
-- **其余地块**：地产、事件卡、命运卡、车站、公共设施、税收等
+**架构要点**
 
-### 3.2 地块系统
+- **权威服务器**：对局状态以后端为唯一真源，前端只负责渲染与发送操作意图。
+- **运行时状态放 Redis**：`game:{room_id}` 存 `GameState`（JSON），`room:{id}` 存房间运行时数据；PostgreSQL 承担用户、房间镜像、对局记录与统计的持久化。
+- **双协议分工**：REST 负责认证、用户、房间、历史与回放查询；WebSocket 负责对局内的实时操作与广播。
+- **Docker 拓扑**：`web`（Nginx，80）反代 `/api/`、`/ws/` 到 `server`（8001）；本地开发由 Vite dev server（3000）代理到 8001。
 
-#### 地块类型
+---
 
-| 类型 | 数量 | 说明 |
-|------|------|------|
-| 起始点 (START) | 1 | 经过/停留获得过路费 |
-| 地产 (PROPERTY) | 22 | 可购买、升级、收租 |
-| 车站 (STATION) | 4 | 可购买，租金随拥有数量递增 |
-| 公共设施 (UTILITY) | 2 | 可购买，租金基于骰子点数 |
-| 机会卡 (CHANCE) | 3 | 触发随机机会事件 |
-| 命运卡 (FATE) | 3 | 触发随机命运事件 |
-| 税收 (TAX) | 2 | 缴纳税款 |
-| 监狱 (JAIL) | 1 | 被关入监狱，需掷双数或支付保释金 |
-| 免费停车 (PARKING) | 1 | 安全格，无特殊效果 |
-| 去监狱 (GO_TO_JAIL) | 1 | 直接送入监狱 |
+## 四、目录结构
 
-#### 地产分组
+### 4.1 仓库根目录
 
-同组地产可统一升级，拥有同组全部地产时享受垄断加成（租金翻倍）。
+```
+E:\Project\GridGo\
+├── README.md                 # 快速上手（环境变量、启动、端点简表、WS 示例）
+├── clear8001.md              # 8001 端口占用排查与清理说明（运维）
+├── docker-compose.yml        # 四服务编排：postgres / redis / server / web
+├── docker/
+│   ├── .env.docker           # Docker 环境变量模板
+│   └── postgres/             # PostgreSQL 初始化目录（建库由镜像自动完成）
+├── docs/
+│   ├── PROJECT.md            # 本文档（项目主文档）
+│   ├── GAME_FLOW.md          # 完整对局流程
+│   └── TECH_STACK.md         # 技术选型
+├── gridgo-server/            # 后端（FastAPI）
+├── gridgo-web/               # 前端（Vue 3 + Vite）
+├── start.bat                 # 一键本地启动（后端 8001 + 前端 3000）
+└── stop.bat                  # 一键停止本地服务
+```
 
-| 分组 | 颜色 | 地块数 | 购买价区间 |
-|------|------|--------|------------|
-| 棕色组 | brown | 2 | 60 |
-| 浅蓝组 | light_blue | 3 | 100-120 |
-| 粉色组 | pink | 3 | 140-160 |
-| 橙色组 | orange | 3 | 180-200 |
-| 红色组 | red | 3 | 220-240 |
-| 黄色组 | yellow | 3 | 260-280 |
-| 绿色组 | green | 3 | 300-320 |
-| 深蓝组 | blue | 2 | 350-400 |
+### 4.2 后端 `gridgo-server`
 
-#### 地产租金表（示例：朝阳路）
+```
+gridgo-server/
+├── alembic/
+│   └── versions/             # 5 个迁移版本（users → rooms/stats/friends → map → game_records → actions/settlement）
+├── alembic.ini
+├── app/
+│   ├── main.py               # FastAPI 实例、路由注册（prefix=/api/v1）、中间件、健康检查
+│   ├── api/
+│   │   ├── middleware/access_log.py
+│   │   ├── v1/               # auth.py / chat.py / friend.py / game.py / leaderboard.py / room.py / user.py
+│   │   └── ws/game_ws.py     # 游戏 WebSocket 端点与消息路由
+│   ├── core/                 # config.py / database.py / deps.py / logging.py / redis.py / security.py
+│   ├── game/
+│   │   ├── engine.py         # 游戏主引擎（回合机、地块、拍卖、交易、破产、结算）
+│   │   ├── events.py         # WebSocket 连接管理与广播
+│   │   ├── replay.py         # 操作序列压缩编码 / 回放
+│   │   ├── schemas.py        # GameState / PlayerState / TileState / 枚举
+│   │   └── ai/player.py      # BaseAIPlayer / EasyAI / MediumAI / HardAI / AIPlayerFactory
+│   ├── models/               # user.py / room.py / stats.py / friend.py / game_record.py / map.py
+│   ├── schemas/              # 各模块 Pydantic 请求响应模型
+│   ├── services/             # auth / chat / friends / game / map / room / stats / token
+│   └── utils/
+├── scripts/seed_classic_map.py   # classic 地图与卡片数据种子
+├── tests/
+│   ├── unit/                 # 引擎规则、重连、交易结算契约、回合日志、WS 协议契约、迁移
+│   └── integration/test_ai_full_game.py
+├── requirements.txt
+├── pyproject.toml
+├── .env.example
+└── Dockerfile
+```
 
-| 建筑等级 | 建筑描述 | 租金 | 备注 |
-|----------|----------|------|------|
-| 0 | 空地 | 4 | 垄断时 ×2 = 8 |
-| 1 | 1栋房屋 | 20 | - |
-| 2 | 2栋房屋 | 60 | - |
-| 3 | 3栋房屋 | 180 | - |
-| 4 | 4栋房屋 | 320 | - |
-| 5 | 酒店 | 450 | 拆除4栋房屋+1栋酒店 |
+### 4.3 前端 `gridgo-web`
 
-> 升级成本：每栋房屋 50（酒店额外 +50，即拆除酒店返还 4 栋房屋）
+```
+gridgo-web/
+├── src/
+│   ├── api/                  # rest.ts / ws.ts / auth.ts / room.ts / chat.ts / friend.ts / user.ts / leaderboard.ts / replay.ts
+│   ├── assets/
+│   ├── components/
+│   │   ├── board/            # GameBoard.vue / TileDetailDialog.vue
+│   │   ├── card/             # AuctionPanel.vue / ChanceCard.vue / DicePanel.vue
+│   │   ├── common/           # ChatPanel / EmptyState / GameOverDialog / LogPanel / PageHeader / StatCard
+│   │   └── player/           # PlayerPanel.vue / TradePanel.vue
+│   ├── composables/          # useGame / useChat / useWebSocket / useAnimation
+│   ├── game/                 # renderer.ts / entities.ts / board.ts / animations.ts / replayEngine.ts
+│   ├── layouts/              # DefaultLayout.vue / GameLayout.vue
+│   ├── pages/                # Home / Room / Game / Login / Register / Profile / Friends / Leaderboard / Replay .vue
+│   ├── router/index.ts
+│   ├── stores/               # user.ts / room.ts / game.ts / replay.ts
+│   ├── styles/               # index.css / theme.css
+│   ├── types/                # api.ts / game.ts / index.ts
+│   ├── utils/                # format.ts / ws.ts
+│   ├── App.vue
+│   ├── env.d.ts              # Vite 类型声明
+│   └── main.ts
+├── index.html
+├── nginx.conf                # 容器 Nginx 配置（反代 /api、/ws）
+├── package.json
+├── pnpm-lock.yaml
+├── tsconfig.json
+├── uno.config.ts
+├── vite.config.ts
+├── vitest.config.ts
+└── Dockerfile
+```
 
-#### 车站租金表
+> **构建约定**：`src` 下 `*.vue` 与 `*.ts` 为唯一源码形态，不保留 `.js` 编译产物；所有内部导入统一使用 `@/` 别名或省略扩展名的相对路径，避免模块解析优先级歧义。
 
-| 拥有数量 | 租金 |
-|----------|------|
-| 1 座 | 25 |
-| 2 座 | 50 |
-| 3 座 | 75 |
-| 4 座 | 100 |
+---
 
-#### 公共设施租金表
+## 五、REST API 路径表
 
-| 拥有数量 | 租金计算 |
+**Base URL**
+
+| 场景 | 前缀 |
+|------|------|
+| 直连后端 | `http://localhost:8001/api/v1` |
+| 本地前端（Vite 代理） | `http://localhost:3000/api/v1` |
+| Docker（Nginx 代理） | `http://localhost/api/v1` |
+
+**鉴权**：除标注「公开」外，均需请求头 `Authorization: Bearer <access_token>`。
+
+### 5.1 认证 `/auth`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| POST | `/auth/register` | 注册（201） | 公开 |
+| POST | `/auth/login` | 登录，返回 access + refresh | 公开 |
+| POST | `/auth/refresh` | 刷新 Token | 公开（凭 refresh_token） |
+| POST | `/auth/logout` | 登出（Token 加入黑名单） | 需要 |
+| GET | `/auth/me` | 当前用户简要信息 | 需要 |
+
+### 5.2 用户 `/users`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/users/me` | 当前用户详细资料 | 需要 |
+| PATCH | `/users/me` | 修改昵称 / 头像 / 邮箱 | 需要 |
+| POST | `/users/me/change-password` | 修改密码 | 需要 |
+| GET | `/users/me/stats` | 我的统计 | 需要 |
+| GET | `/users/me/records` | 我的对局记录（`limit` ≤100，`offset`） | 需要 |
+| GET | `/users/records/{game_id}` | 单局详情（含各玩家结算） | 需要 |
+| GET | `/users/{user_id}/stats` | 指定用户统计 | 公开 |
+| GET | `/users/{user_id}/records` | 指定用户对局记录 | 公开 |
+
+### 5.3 房间 `/rooms`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/rooms` | 等待中的房间列表 | 公开 |
+| POST | `/rooms` | 创建房间（201） | 需要 |
+| GET | `/rooms/by-code/{code}` | 按 6 位房间码查询 | 公开 |
+| GET | `/rooms/{room_id}` | 房间详情 | 公开 |
+| POST | `/rooms/join` | 加入房间（房号或房间 ID，可带密码） | 需要 |
+| POST | `/rooms/{room_id}/leave` | 离开房间（房主离开销毁房间） | 需要 |
+| POST | `/rooms/{room_id}/ready` | 准备 / 取消准备 | 需要 |
+| POST | `/rooms/{room_id}/switch-role` | 切换玩家 ↔ 观战者 | 需要 |
+| PATCH | `/rooms/{room_id}/settings` | 更新房间设置 | 需要（房主） |
+| PUT | `/rooms/{room_id}/config` | 兼容别名，语义同 `PATCH /settings` | 需要（房主） |
+| POST | `/rooms/{room_id}/start` | 开始游戏 | 需要（房主） |
+| POST | `/rooms/{room_id}/reset` | 重置房间到等待态 | 需要（房主） |
+
+> **路由匹配注意**：`GET /rooms/by-code/{code}` 先于 `GET /rooms/{room_id}` 注册，房间码查询不会落入房间 ID 分支。
+
+### 5.4 对局 `/games`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/games/{room_id}` | 对局信息 | 公开 |
+| GET | `/games/{room_id}/state` | 完整游戏状态（调试用） | 公开 |
+| GET | `/games/{room_id}/log` | 对局日志（读已结束对局的 `game_records`） | 公开 |
+| POST | `/games/{room_id}/surrender` | 投降 | 需要 |
+| GET | `/games/replay/{game_id}` | 回放数据（配置快照 + 操作序列 + 最终快照） | 公开 |
+| GET | `/games/history/{user_id}` | 用户历史对局（`limit` 默认 20） | 公开 |
+
+### 5.5 聊天 `/rooms/{room_id}/chat`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/rooms/{room_id}/chat` | 拉取消息，游标 `before`（消息 ID） | 公开 |
+| POST | `/rooms/{room_id}/chat` | 发送消息（201） | 需要 |
+
+### 5.6 好友 `/friends`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/friends` | 好友列表 | 需要 |
+| GET | `/friends/requests` | 待处理好友申请 | 需要 |
+| POST | `/friends/requests` | 发起好友申请（201） | 需要 |
+| POST | `/friends/requests/{request_id}/respond` | 同意 / 拒绝申请 | 需要 |
+| DELETE | `/friends/{friend_id}` | 删除好友 | 需要 |
+
+### 5.7 排行榜 `/leaderboard`
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/leaderboard` | 榜单（`limit` 1-100 默认 50，`offset`） | 公开 |
+
+---
+
+## 六、WebSocket 协议
+
+### 6.1 端点与握手
+
+| 场景 | 地址 |
+|------|------|
+| 直连后端 | `ws://localhost:8001/ws/game?token=<access_token>` |
+| 本地前端（Vite 代理，ws:true） | `ws://localhost:3000/ws/game?token=<access_token>` |
+| Docker（Nginx 代理） | `ws://localhost/ws/game?token=<access_token>` |
+
+握手流程（与 `app/api/ws/game_ws.py` 实现一致）：
+
+1. 客户端携带 `token` 查询参数发起连接；服务端通过 `AuthService.get_current_user` 鉴权，失败即以关闭码 `4001` 断开。
+2. 服务端 `accept` 后等待客户端**首帧消息**，首帧 JSON 必须包含 `room_id` 字段（服务端只取该字段，不校验 `type`）；格式错误 → `4002`，缺少 `room_id` → `4003`。
+3. 服务端调用 `GameService.ensure_game_initialized` 确保对局已初始化：初始化失败 → `4004`（携带异常文案），对局状态不存在 → `4005`。
+4. 连接注册进房间广播组，随后**单播**下发首帧 `state.snapshot`（`data` 内含 `is_spectator` 标识）。
+5. 复位玩家连接标记并恢复后台任务（AI 回合、超时计时器等），广播 `system.player_connected` / `system.spectator_connected`（排除自身）。
+6. 断线时广播 `system.player_disconnected` / `system.spectator_disconnected`，并记录离线时刻用于重连档位判定。
+
+**关闭码**
+
+| 码 | 含义 |
+|----|------|
+| 4001 | 认证失败（Token 无效） |
+| 4002 | 初始化消息格式错误 |
+| 4003 | 首帧缺少 `room_id` |
+| 4004 | 对局初始化失败（如房间未开始） |
+| 4005 | 游戏状态不存在 |
+
+### 6.2 上行消息（客户端 → 服务端）
+
+| 类型 | 说明 |
+|------|------|
+| `system.ping` | 心跳，服务端单播回 `system.pong` |
+| `game.roll_dice` | 掷骰子 |
+| `game.buy_property` | 购买当前地块 |
+| `game.decline_property` | 放弃购买（别名 `game.decline_buy`） |
+| `game.skip_property` | 跳过当前地块 |
+| `game.auction_bid` | 拍卖出价 |
+| `game.auction_start` | 兼容占位：服务端忽略（拍卖由服务端在玩家放弃购买后自动广播） |
+| `game.build` | 建造升级 |
+| `game.demolish` | 拆除建筑 |
+| `game.mortgage` | 抵押地产 |
+| `game.redeem` | 赎回地产 |
+| `game.end_turn` | 结束回合 |
+| `game.jail_pay_bail` | 支付保释金（别名 `game.jail_pay`） |
+| `game.jail_use_card` | 使用免罪卡 |
+| `game.trade_offer` | 发起交易报价 |
+| `game.trade_accept` | 接受交易 |
+| `game.trade_reject` | 拒绝交易 |
+| `chat.send` | 发送聊天消息 |
+
+**文档历史别名归一**（`ALIAS_TYPES`，服务端统一映射到规范类型）：
+
+| 历史别名 | 规范类型 |
 |----------|----------|
-| 1 座 | 骰子点数 × 4 |
-| 2 座 | 骰子点数 × 10 |
+| `game.decline_buy` | `game.decline_property` |
+| `game.jail_pay` | `game.jail_pay_bail` |
 
-#### 完整棋盘地块配置表
+**观战者被拦截的操作类型**（`SPECTATOR_BLOCKED_TYPES`，共 16 项）：
+`game.roll_dice`、`game.buy_property`、`game.decline_property`、`game.skip_property`、`game.auction_bid`、`game.build`、`game.demolish`、`game.mortgage`、`game.redeem`、`game.end_turn`、`game.jail_pay_bail`、`game.jail_use_card`、`game.trade_offer`、`game.trade_accept`、`game.trade_reject`、`chat.send`。
 
-| 位置 | 名称 | 类型 | 分组 | 购买价 | 备注 |
-|------|------|------|------|--------|------|
-| 0 | 起点 | START | - | - | 经过获得过路费 200 |
-| 1 | 朝阳路 | PROPERTY | brown | 60 | 租金: 4/20/60/180/320/450 |
-| 2 | 命运卡 | FATE | - | - | 抽取命运卡 |
-| 3 | 朝阳大道 | PROPERTY | brown | 60 | 租金: 4/20/60/180/320/450 |
-| 4 | 所得税 | TAX | - | - | 支付 200 或总资产的 10% |
-| 5 | 北京站 | STATION | - | 200 | 租金: 25/50/75/100 |
-| 6 | 长安街 | PROPERTY | light_blue | 100 | 租金: 6/30/90/270/400/550 |
-| 7 | 机会卡 | CHANCE | - | - | 抽取机会卡 |
-| 8 | 南京路 | PROPERTY | light_blue | 100 | 租金: 6/30/90/270/400/550 |
-| 9 | 淮海路 | PROPERTY | light_blue | 120 | 租金: 8/40/100/300/450/600 |
-| 10 | 监狱 | JAIL | - | - | 仅停留时无效果，被送入时需出狱 |
-| 11 | 王府井 | PROPERTY | pink | 140 | 租金: 10/50/150/450/625/750 |
-| 12 | 电力公司 | UTILITY | - | 150 | 租金: 骰子×4 或 ×10 |
-| 13 | 西单 | PROPERTY | pink | 140 | 租金: 10/50/150/450/625/750 |
-| 14 | 东单 | PROPERTY | pink | 160 | 租金: 12/60/180/500/700/900 |
-| 15 | 上海站 | STATION | - | 200 | 租金: 25/50/75/100 |
-| 16 | 春熙路 | PROPERTY | orange | 180 | 租金: 14/70/200/550/750/950 |
-| 17 | 命运卡 | FATE | - | - | 抽取命运卡 |
-| 18 | 步行街 | PROPERTY | orange | 180 | 租金: 14/70/200/550/750/950 |
-| 19 | 中山路 | PROPERTY | orange | 200 | 租金: 16/80/220/600/800/1000 |
-| 20 | 免费停车 | PARKING | - | - | 安全格 |
-| 21 | 解放路 | PROPERTY | red | 220 | 租金: 18/90/250/700/875/1050 |
-| 22 | 机会卡 | CHANCE | - | - | 抽取机会卡 |
-| 23 | 人民路 | PROPERTY | red | 220 | 租金: 18/90/250/700/875/1050 |
-| 24 | 建设路 | PROPERTY | red | 240 | 租金: 20/100/300/750/925/1100 |
-| 25 | 广州站 | STATION | - | 200 | 租金: 25/50/75/100 |
-| 26 | 天河路 | PROPERTY | yellow | 260 | 租金: 22/110/330/800/975/1150 |
-| 27 | 珠江路 | PROPERTY | yellow | 260 | 租金: 22/110/330/800/975/1150 |
-| 28 | 自来水公司 | UTILITY | - | 150 | 租金: 骰子×4 或 ×10 |
-| 29 | 体育西路 | PROPERTY | yellow | 280 | 租金: 24/120/360/850/1025/1200 |
-| 30 | 去监狱 | GO_TO_JAIL | - | - | 直接进入监狱 |
-| 31 | 科技园 | PROPERTY | green | 300 | 租金: 26/130/390/900/1100/1275 |
-| 32 | 软件大道 | PROPERTY | green | 300 | 租金: 26/130/390/900/1100/1275 |
-| 33 | 命运卡 | FATE | - | - | 抽取命运卡 |
-| 34 | 金融街 | PROPERTY | green | 320 | 租金: 28/150/450/1000/1200/1400 |
-| 35 | 深圳站 | STATION | - | 200 | 租金: 25/50/75/100 |
-| 36 | 机会卡 | CHANCE | - | - | 抽取机会卡 |
-| 37 | 滨海大道 | PROPERTY | blue | 350 | 租金: 35/175/500/1100/1300/1500 |
-| 38 | 奢侈品税 | TAX | - | - | 支付 100 |
-| 39 | 前海路 | PROPERTY | blue | 400 | 租金: 50/200/600/1400/1700/2000 |
+### 6.3 下行消息（服务端 → 客户端）
 
-### 3.3 核心规则
-
-#### 3.3.1 游戏初始化
-
-| 参数 | 默认值 | 可配置范围 |
-|------|--------|------------|
-| 起始资金 | 1500 | 1000-5000 |
-| 过路费 | 200 | 100-500 |
-| 最大玩家数 | 8 | 2-8 |
-| 回合超时 | 30秒 | 15-120秒 |
-| AI 难度 | 中等 | 简单/中等/困难 |
-| 破产淘汰 | 开启 | 开启/关闭 |
-| 拍卖模式 | 开启 | 开启/关闭 |
-
-#### 3.3.2 回合流程
-
-```
-回合开始
-  │
-  ├─► 1. 掷骰子（2个骰子，1-6）
-  │     ├─ 如果在监狱中：
-  │     │   ├─ 掷出双数 → 出狱，移动
-  │     │   ├─ 未掷出双数 → 可选择支付保释金(50)或继续关押
-  │     │   └─ 连续3次未掷出双数 → 强制支付保释金并移动
-  │     └─ 如果自由：
-  │         ├─ 双数 → 移动后再获得一次掷骰机会
-  │         └─ 连续3次双数 → 第三次直接入狱（防作弊机制）
-  │
-  ├─► 2. 移动棋子
-  │     ├─ 经过起点 → 获得过路费
-  │     └─ 到达目标地块 → 触发地块效果
-  │
-  ├─► 3. 地块效果处理
-  │     ├─ 地产/车站/公共设施：
-  │     │   ├─ 无主 → 可选择购买或跳过
-  │     │   ├─ 自己的 → 可选择升级
-  │     │   └─ 他人的 → 支付租金
-  │     ├─ 机会卡/命运卡 → 抽卡并执行效果
-  │     ├─ 税收 → 扣除税款
-  │     ├─ 去监狱 → 直接进入监狱
-  │     └─ 监狱/免费停车 → 无特殊效果
-  │
-  ├─► 4. 自由行动阶段（可选）
-  │     ├─ 建造/拆除房屋
-  │     ├─ 抵押/赎回地产
-  │     ├─ 发起交易
-  │     └─ 使用道具
-  │
-  └─► 5. 回合结束 → 下一位玩家
-```
-
-#### 3.3.3 租金计算规则
-
-```python
-基础租金 = 地块租金表[当前建筑等级]
-
-垄断加成:
-  if 拥有该分组所有地产 and 建筑等级 == 0:
-      实际租金 = 基础租金 × 2
-
-抵押状态:
-  if 地产已抵押:
-      不收租金  # 抵押地产不产生租金
-```
-
-#### 3.3.4 破产规则
-
-```
-当玩家负债 > 现金 + 可变现资产:
-  1. 进入"资产处理"阶段
-  2. 可选择：出售房屋 → 抵押地产 → 与其他玩家交易
-  3. 若仍无法偿还:
-     ├─ 债权人为其他玩家 → 所有资产转给债权人
-     └─ 债权人为银行 → 所有资产归还银行，地产拍卖
-  4. 玩家被淘汰，变为观战者
-```
-
-#### 3.3.5 拍卖规则
-
-| 规则 | 说明 |
-|------|------|
-| 触发条件 | 玩家选择不购买停留的无主地产时 |
-| 起拍价 | 地块购买价的 50% |
-| 最低加价 | 10 |
-| 参与者 | 所有未破产玩家 |
-| 时限 | 每次出价后 15 秒倒计时，超时视为放弃 |
-| 成交 | 最后一个出价者获得地块，资金扣入银行 |
-
-#### 3.3.6 监狱规则
-
-| 场景 | 处理方式 |
-|------|----------|
-| 被送入监狱 | 不经过起点，不获得过路费 |
-| 在监狱中掷出双数 | 出狱，按掷出点数移动 |
-| 在监狱中未掷出双数 | 可选择支付 50 保释金或继续关押 |
-| 连续 3 回合未掷出双数 | 强制支付 50 保释金并移动 |
-| 使用免罪卡 | 直接出狱，不消耗回合 |
-| 在监狱中仍可 | 收租、交易、建造、抵押 |
-
-### 3.4 卡片事件系统
-
-#### 3.4.1 机会卡（CHANCE）
-
-| ID | 卡片名称 | 效果 |
-|----|----------|------|
-| C01 | 前进至起点 | 移动到 Tile 0，获得过路费 |
-| C02 | 前进至最近的车站 | 移动到下一车站，需付双倍租金 |
-| C03 | 前进三格 | 向前移动 3 格 |
-| C04 | 银行分红 | 获得 150 |
-| C05 | 修理费 | 每栋房屋支付 25，每家酒店支付 100 |
-| C06 | 出狱卡 | 获得免罪卡，可随时使用出狱 |
-| C07 | 后退一格 | 向后移动 1 格 |
-| C08 | 前进至朝阳路 | 移动到 Tile 1 |
-| C09 | 被罚款 | 支付 40 |
-| C10 | 前进至监狱 | 直接进入监狱 |
-
-#### 3.4.2 命运卡（FATE）
-
-| ID | 卡片名称 | 效果 |
-|----|----------|------|
-| F01 | 银行利息 | 获得 100 |
-| F02 | 医疗费用 | 支付 50 |
-| F03 | 生日快乐 | 每位其他玩家向你支付 20 |
-| F04 | 遗产继承 | 获得 200 |
-| F05 | 出狱卡 | 获得免罪卡 |
-| F06 | 入狱 | 直接进入监狱 |
-| F07 | 补缴税款 | 每栋房屋支付 40，每家酒店支付 115 |
-| F08 | 彩票中奖 | 获得 500 |
-| F09 | 咨询费 | 支付 25 |
-| F10 | 前进至起点 | 移动到 Tile 0，获得过路费 |
-
-> 卡片抽取后放入弃牌堆，牌堆耗尽后重新洗牌。免罪卡使用后放回牌堆底部。
-
-### 3.5 道具系统
-
-道具为可选扩展功能，在 V2.0 版本实现。每局游戏开始时每人随机获得 1-2 个道具，游戏中可通过特定地块或事件获取。
-
-| 道具 | 效果 | 获取方式 |
+| 类型 | 说明 | 发送方式 |
 |------|------|----------|
-| 骰子操控 | 下次掷骰指定点数 | 事件奖励 |
-| 交换位置 | 与指定玩家交换棋子位置 | 事件奖励 |
-| 地震 | 随机摧毁一个玩家的一栋房屋 | 事件奖励 |
-| 护盾 | 免疫一次负面效果 | 事件奖励 |
-| 偷取 | 从指定玩家处偷取 50-100 | 事件奖励 |
-| 分红卡 | 所有玩家向你支付 50 | 事件奖励 |
+| `state.snapshot` | 连接建立后的首帧完整状态（含 `is_spectator`） | 单播 |
+| `state.update` | 每次状态落盘后广播的完整状态 | 广播 |
+| `game.turn_change` | 回合切换：`current_player_id` / `current_player_nickname` / `turn_number` / `is_ai` | 广播 |
+| `game.dice_result` | 掷骰结果：`player_id` / `dice` / `total` / `is_double`（三连双入狱时附 `speed_trap=true`） | 广播 |
+| `game.extra_roll` | 双数获得额外掷骰：`player_id` / `reason="double"` | 广播 |
+| `game.player_moved` | 移动结果：`player_id` / `from` / `to` / `steps` / `passed_go` | 广播 |
+| `game.pass_go` | 经过起点奖励（单播给受益玩家） | 单播 |
+| `game.tile_event` | 停在无主/可操作地块，等待决策 | 广播 |
+| `game.property_bought` | 购地成功 | 广播 |
+| `game.property_declined` / `game.property_skipped` | 放弃购买 / 跳过地块 | 广播 |
+| `game.rent_paid` | 支付租金 | 广播 |
+| `game.tax_paid` | 缴纳税款 | 广播 |
+| `game.card_drawn` | 抽到机会/命运卡（含 `effect_type` / 描述） | 广播 |
+| `game.get_out_of_jail_card` | 获得免罪卡 | 广播 |
+| `game.jail_sent` | 入狱 | 广播 |
+| `game.jail_released` | 出狱 | 广播 |
+| `game.money_change` | 现金变动（含 `amount` / `cash` / `reason`） | 广播 |
+| `game.building_built` / `game.building_demolished` | 建造 / 拆除 | 广播 |
+| `game.property_mortgaged` / `game.property_redeemed` | 抵押 / 赎回 | 广播 |
+| `game.auction_start` / `game.auction_update` / `game.auction_end` | 拍卖开始 / 出价更新 / 结束 | 广播 |
+| `game.trade_offer` | 交易报价（广播给全房） | 广播 |
+| `game.trade_received` | 交易报价定向投递给被报价方 | 单播 |
+| `game.trade_accept` / `game.trade_reject` / `game.trade_completed` | 交易接受 / 拒绝 / 完成 | 广播 |
+| `game.player_bankrupt` | 玩家破产 | 广播 |
+| `game.over` | 对局结束：`end_reason` / `winner_id` / `rankings` / `total_turns` / `game_record_id` | 广播 |
+| `chat.message` | 聊天消息（WS 发送后由服务端广播） | 广播 |
+| `system.player_connected` / `system.player_disconnected` | 玩家上线 / 掉线 | 广播 |
+| `system.player_reconnected` | 玩家重连（此前被判离线） | 广播 |
+| `system.spectator_connected` / `system.spectator_disconnected` | 观战者进入 / 离开 | 广播 |
+| `system.pong` | 心跳响应 | 单播 |
+| `system.error` | 错误通知（前端已订阅） | 广播 |
 
-### 3.6 AI 人机系统
+> 消息信封统一为 `{"type": "...", "data": {...}, "timestamp": <毫秒>}`；服务端不产生 `seq` 字段。
 
-#### 难度等级
-
-| 难度 | 策略 | 决策延迟 | 说明 |
-|------|------|----------|------|
-| 简单 | 随机决策 | 1-2秒 | 50%概率购买地产，随机使用道具 |
-| 中等 | 启发式规则 | 2-3秒 | 优先垄断分组、保留应急资金、适度升级 |
-| 困难 | 蒙特卡洛模拟 | 3-5秒 | 模拟 N 步后的局面评估，选择期望收益最高的操作 |
-
-#### AI 决策权重模型（中等难度示例）
-
-```python
-def ai_decide_buy_property(player, tile, game_state):
-    score = 0
-    # 地块价格占现金比例
-    score += (tile.price / player.cash) * -30
-    # 是否能形成垄断
-    if would_complete_group(player, tile):
-        score += 50
-    # 同组已有几块
-    same_group_owned = count_group_owned(player, tile.group)
-    score += same_group_owned * 15
-    # 移动到该地块的概率（未来收益期望）
-    probability = calculate_landing_probability(tile.position)
-    score += probability * 20
-    # 保留应急资金
-    if player.cash - tile.price < 200:
-        score -= 40
-
-    return score > 0  # score > 0 则购买
-```
-
-#### AI 公平性原则
-
-- AI 不获取未公开信息（不会"读牌"）
-- AI 骰子随机性与真人一致
-- AI 交易提议基于自身利益评估，不串通
-- 困难 AI 的模拟深度有上限，避免计算延迟过高
-
----
-
-## 四、功能需求
-
-### 4.1 用户模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| U-01 | 用户注册 | P0 | 用户名+密码注册 |
-| U-02 | 用户登录 | P0 | 返回 JWT Token |
-| U-03 | Token 刷新 | P0 | Refresh Token 换取新 Access Token |
-| U-04 | 用户登出 | P0 | 清除 Token，断开 WebSocket |
-| U-05 | 修改密码 | P1 | 需验证旧密码 |
-| U-06 | 修改昵称/头像 | P1 | 个性化设置 |
-| U-07 | 游客模式 | P2 | 可浏览大厅/排行榜，不可加入游戏 |
-
-### 4.2 大厅与房间模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| L-01 | 游戏大厅 | P0 | 展示开放房间列表、创建房间入口 |
-| L-02 | 创建房间 | P0 | 设置房间名、密码、最大人数、规则配置 |
-| L-03 | 加入房间 | P0 | 通过房间列表或房间号加入 |
-| L-04 | 房间内准备 | P0 | 玩家准备/取消准备 |
-| L-05 | 添加 AI | P0 | 房主可添加 AI 玩家并选择难度 |
-| L-06 | 踢出玩家 | P1 | 房主可踢出房间内玩家 |
-| L-07 | 修改房间设置 | P1 | 房主可在游戏开始前修改规则 |
-| L-08 | 快速匹配 | P2 | 自动匹配有空位的房间 |
-| L-09 | 房间聊天 | P1 | 房间内文字聊天 |
-
-### 4.3 游戏模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| G-01 | 掷骰子 | P0 | 投掷2个骰子，显示点数和动画 |
-| G-02 | 棋子移动 | P0 | 沿棋盘移动，带平滑动画 |
-| G-03 | 购买地产 | P0 | 停在无主地产时可购买 |
-| G-04 | 支付租金 | P0 | 停在他人地产时自动支付租金 |
-| G-05 | 建造房屋 | P0 | 在自己的地产上建造房屋/酒店 |
-| G-06 | 拆除房屋 | P1 | 拆除房屋，返还半价 |
-| G-07 | 抵押地产 | P1 | 抵押地产获取现金（购买价的一半） |
-| G-08 | 赎回地产 | P1 | 支付赎回费用取回抵押的地产 |
-| G-09 | 抽卡事件 | P0 | 停在机会/命运卡格时抽取卡片 |
-| G-10 | 拍卖 | P1 | 地产拍卖系统 |
-| G-11 | 玩家交易 | P1 | 玩家间现金/地产交易 |
-| G-12 | 入狱/出狱 | P0 | 监狱机制 |
-| G-13 | 破产判定 | P0 | 资不抵债时淘汰 |
-| G-14 | 回合超时 | P0 | 超时自动跳过/AI代打 |
-| G-15 | 断线重连 | P0 | 断线后重连恢复游戏状态 |
-| G-16 | 游戏结束结算 | P0 | 显示最终排名、资产统计 |
-| G-17 | 观战模式 | P2 | 被淘汰或游戏结束后可观战 |
-
-### 4.4 社交模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| S-01 | 游戏内聊天 | P1 | 游戏中文字聊天 |
-| S-02 | 快捷消息 | P1 | 预设快捷语句（"好运气！""破产了！"等） |
-| S-03 | 表情/动作 | P2 | 头像表情气泡 |
-| S-04 | 好友系统 | P2 | 添加好友、邀请好友加入房间 |
-
-### 4.5 数据与统计模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| D-01 | 对战记录 | P0 | 保存每局游戏结果 |
-| D-02 | 个人战绩 | P1 | 胜率、总场数、平均资产等统计 |
-| D-03 | 排行榜 | P1 | 胜率/胜场/积分排名 |
-| D-04 | 游戏回放 | P2 | 回放完整对局过程 |
-| D-05 | 成就系统 | P2 | 解锁成就（首胜、大逆转等） |
-
-### 4.6 设置模块
-
-| 编号 | 功能 | 优先级 | 描述 |
-|------|------|--------|------|
-| SET-01 | 音效开关 | P1 | 音效/背景音乐开关及音量调节 |
-| SET-02 | 动画速度 | P1 | 棋子移动、骰子动画速度调节 |
-| SET-03 | 画质设置 | P2 | 低/中/高画质切换 |
-| SET-04 | 语言切换 | P2 | 中文/英文 |
-| SET-05 | 色盲模式 | P2 | 地块颜色辅助标识 |
-
----
-
-## 五、游戏流程
-
-### 5.1 完整对局流程
+### 6.4 连接示例（wscat / wscat 兼容客户端）
 
 ```
-创建/加入房间
-       │
-       ▼
-玩家准备 ──── 房主添加AI补位
-       │
-       ▼
-房主点击"开始游戏"
-       │
-       ▼
-服务器初始化游戏状态
-  ├─ 分配初始资金
-  ├─ 随机决定玩家顺序
-  ├─ 所有棋子放在起点
-  └─ 生成洗牌后的卡组
-       │
-       ▼
-┌──► 第N回合：
-│    ├─ 当前玩家掷骰子
-│    ├─ 棋子移动 + 触发地块效果
-│    ├─ 自由行动阶段（建造/交易/抵押）
-│    ├─ 检查破产条件
-│    └─ 切换到下一玩家
-│         │
-│         ▼
-│    检查游戏结束条件 ──否──► 回到回合开始
-│         │
-│        是
-│         ▼
-│    游戏结束结算
-│    ├─ 显示最终排名
-│    ├─ 保存对战记录
-│    └─ 返回大厅/再来一局
-└──────────────────────────────────────────
-```
+# 1. 登录取得 access_token 后建立连接
+ws://localhost:8001/ws/game?token=eyJhbGciOi...
 
-### 5.2 回合状态机
+# 2. 首帧：声明加入哪个房间（只校验 room_id）
+{"type": "join", "data": {"room_id": "75873edb9a92"}}
 
-```
-                    ┌───────────┐
-                    │ TURN_START │
-                    └─────┬─────┘
-                          │
-                    ┌─────▼─────┐
-                    │ WAIT_ROLL  │◄──── 回合超时(自动掷骰)
-                    └─────┬─────┘
-                     掷骰子│
-                    ┌─────▼─────┐
-              ┌─────┤  ROLLING   ├─────┐
-              │     └────────────┘     │
-         双数│                    非双数│
-              │                         │
-         ┌────▼────┐            ┌──────▼──────┐
-         │ 可再掷骰 │            │   MOVING     │
-         └─────────┘            └──────┬──────┘
-                                       │ 移动完成
-                              ┌────────▼────────┐
-                              │  TILE_EFFECT    │
-                              └────────┬────────┘
-                                       │
-                         ┌─────────────▼─────────────┐
-                         │ 需要玩家决策?              │
-                         │ (买地/拍卖/出狱/支付保释)  │
-                         └─────┬─────────────┬───────┘
-                          是   │          否  │
-                     ┌────────▼────┐   ┌─────▼──────┐
-                     │WAIT_DECISION│   │ FREE_ACTION │
-                     └────────┬────┘   └─────┬──────┘
-                     玩家决策 │              │ 可选操作完成
-                     ┌────────▼────┐         │
-                     │   RESOLVED  │◄────────┘
-                     └────────┬────┘
-                              │
-                     ┌────────▼────┐
-                     │  TURN_END   │
-                     └────────┬────┘
-                              │
-                     ┌────────▼────┐
-                     │  下一玩家    │
-                     └─────────────┘
-```
+# 3. 服务端首帧回包
+{"type": "state.snapshot", "data": {"game_id": "...", "phase": "TURN_START", "is_spectator": false, "players": [...], "tiles": [...]}, "timestamp": 1758380000000}
 
-### 5.3 游戏结束条件
+# 4. 心跳
+{"type": "system.ping", "data": {}}
+{"type": "system.pong", "data": {}, "timestamp": 1758380001000}
 
-| 条件 | 说明 |
-|------|------|
-| 仅剩 1 名未破产玩家 | 该玩家获胜（经典模式） |
-| 达到回合上限 | 资产最多的玩家获胜（可配置，默认 100 回合） |
-| 全体玩家同意结束 | 按当前资产排名结算 |
-
-### 5.4 断线重连机制
-
-```
-玩家断线
-    │
-    ▼
-服务器标记"断线中"，AI暂代操作
-    │
-    ├─ 30秒内重连 ──► 发送全量状态快照 ──► 前端恢复渲染 ──► 玩家恢复控制
-    │
-    ├─ 30秒~3分钟重连 ──► 同上，但本回合可能已被AI代打
-    │
-    └─ 超过3分钟 ──► 判定为退出，AI持续代打至游戏结束
+# 5. 掷骰（当前回合玩家）
+{"type": "game.roll_dice", "data": {}}
+{"type": "game.dice_result", "data": {"player_id": 8, "dice": [3, 5], "total": 8, "is_double": false}, "timestamp": 1758380001200}
 ```
 
 ---
 
-## 六、数据模型设计
+## 七、数据库设计
 
-### 6.1 ER 关系概览
+**迁移管理**：Alembic，`alembic/versions` 共 5 个版本，按序为：
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────────┐
-│   User   │────►│  Room    │────►│  GameRecord  │
-│          │     │          │     │              │
-└────┬─────┘     └────┬─────┘     └──────┬───────┘
-     │                │                  │
-     │           ┌────▼─────┐     ┌──────▼───────┐
-     │           │RoomPlayer│     │ GamePlayer   │
-     │           └──────────┘     └──────────────┘
-     │
-     ├──────────────────┐
-     │                  │
-┌────▼─────┐     ┌──────▼──────┐
-│  Friend  │     │  UserStats  │
-└──────────┘     └─────────────┘
-```
+| 顺序 | 版本文件 | 内容 |
+|:----:|----------|------|
+| 1 | `f114bfc602d4_create_users_table.py` | `users` |
+| 2 | `b7c1d9e4a2f8_create_rooms_stats_friends_tables.py` | `rooms` / `room_players` / `user_stats` / `friendships` |
+| 3 | `234927b3e0cc_create_map_tables.py` | `maps` / `map_tiles` / `map_station_rent` / `map_utility_rent` / `map_cards` |
+| 4 | `36c5dd26aae6_create_game_records_tables.py` | `game_records` / `game_players` / `game_turn_logs` |
+| 5 | `a1b2c3d4e5f6_add_actions_and_settlement_to_game_records.py` | `game_records.actions`、`game_players.settlement_amount` |
 
-### 6.2 数据库表设计
+### 7.1 用户与统计
 
-#### 6.2.1 users - 用户表
+| 表 | 关键字段 | 说明 |
+|----|----------|------|
+| `users` | `id`(BIGINT PK) / `username`(唯一) / `password_hash` / `nickname` / `avatar` / `email`(唯一) / `status`(0=正常 1=禁用) / `created_at` / `updated_at` | 账号主表 |
+| `user_stats` | `user_id`(PK) / `total_games` / `total_wins` / `total_bankruptcies` / `total_rent_collected` / `total_rent_paid` / `best_rank` / `win_streak` / `best_win_streak` / `score` / `updated_at` | 排行榜排序依据为 `score` |
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | 用户ID |
-| username | VARCHAR(50) | UNIQUE, NOT NULL | 用户名 |
-| password_hash | VARCHAR(255) | NOT NULL | 密码哈希(bcrypt) |
-| nickname | VARCHAR(50) | NOT NULL | 显示昵称 |
-| avatar | VARCHAR(255) | NULL | 头像URL |
-| email | VARCHAR(100) | UNIQUE, NULL | 邮箱(可选) |
-| status | TINYINT | DEFAULT 0 | 0=正常 1=禁用 |
-| created_at | DATETIME | DEFAULT NOW | 注册时间 |
-| updated_at | DATETIME | DEFAULT NOW | 更新时间 |
+### 7.2 房间
 
-#### 6.2.2 rooms - 房间表
+| 表 | 关键字段 | 说明 |
+|----|----------|------|
+| `rooms` | `id`(VARCHAR(32) PK) / `room_code`(唯一，6 位) / `name` / `host_id` / `password_hash` / `max_players`(默认 8) / `map_id`(默认 classic) / `ai_count` / `ai_difficulty` / `status`(0=等待 1=游戏中 2=已结束) / `config`(JSON) / 时间戳 | Redis 运行时状态的写穿透镜像；索引 `ix_rooms_status` |
+| `room_players` | `id` / `room_id` / `user_id`(AI 为负数) / `nickname` / `is_host` / `is_ready` / `is_ai` / `ai_difficulty` / `is_spectator` / `joined_at` | 唯一约束 `(room_id, user_id)`，索引 `ix_room_players_room_id` |
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | 房间ID |
-| room_code | VARCHAR(8) | UNIQUE, NOT NULL | 房间码(6位) |
-| name | VARCHAR(50) | NOT NULL | 房间名称 |
-| host_id | BIGINT | FK→users.id | 房主ID |
-| password | VARCHAR(255) | NULL | 房间密码(加密) |
-| max_players | TINYINT | DEFAULT 8 | 最大人数 |
-| status | TINYINT | DEFAULT 0 | 0=等待 1=游戏中 2=已结束 |
-| config | JSON | NOT NULL | 游戏规则配置 |
-| created_at | DATETIME | DEFAULT NOW | 创建时间 |
+### 7.3 对局与结算
 
-#### 6.2.3 room_players - 房间玩家关联表
+| 表 | 关键字段 | 说明 |
+|----|----------|------|
+| `game_records` | `id` / `room_id` / `map_id` / `total_turns` / `player_count` / `winner_id`(AI 为负) / `end_reason`(last_standing / turn_limit / vote_end) / `config_snapshot` / `actions`(压缩编码) / `final_snapshot` / `created_at` | 单局主记录 |
+| `game_players` | `id` / `game_id` / `user_id` / `nickname` / `rank` / `total_assets` / `settlement_amount`(正=盈利 负=亏损) / `is_bankrupt` / `is_ai` / `ai_difficulty` | 单局内每位玩家结算 |
+| `game_turn_logs` | `id` / `game_id` / `turn_number` / `player_id` / `action_type` / `action_data`(JSON) / `dice_values`(如 `3,5`) / `created_at` | 回合级操作日志 |
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | - |
-| room_id | BIGINT | FK→rooms.id | 房间ID |
-| user_id | BIGINT | FK→users.id | 用户ID |
-| is_ai | BOOLEAN | DEFAULT FALSE | 是否AI |
-| ai_difficulty | TINYINT | NULL | AI难度(1=简单 2=中等 3=困难) |
-| is_ready | BOOLEAN | DEFAULT FALSE | 是否准备 |
-| joined_at | DATETIME | DEFAULT NOW | 加入时间 |
+### 7.4 好友
 
-#### 6.2.4 game_records - 对局记录表
+| 表 | 关键字段 | 说明 |
+|----|----------|------|
+| `friendships` | `id` / `user_id`(发起方) / `friend_id`(接收方) / `status`(SmallInteger) / `created_at` / `updated_at` | 唯一约束 `(user_id, friend_id)`，索引 `ix_friendships_friend_id` |
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | 对局ID |
-| room_id | BIGINT | FK→rooms.id | 房间ID |
-| config | JSON | NOT NULL | 游戏配置快照 |
-| total_turns | INT | NOT NULL | 总回合数 |
-| winner_id | BIGINT | FK→users.id, NULL | 胜者ID(可能为AI) |
-| end_reason | TINYINT | NOT NULL | 1=仅剩一人 2=回合上限 3=全体同意 |
-| final_snapshot | JSON | NOT NULL | 最终状态快照 |
-| started_at | DATETIME | NOT NULL | 开始时间 |
-| ended_at | DATETIME | NOT NULL | 结束时间 |
+### 7.5 地图（数据驱动）
 
-#### 6.2.5 game_players - 对局玩家表
+| 表 | 关键字段 | 说明 |
+|----|----------|------|
+| `maps` | `id`(PK，如 classic) / `name` / `description` / `tile_count`(默认 40) / `start_bonus`(默认 200) / `jail_bail`(默认 50) / `max_build_level`(默认 5) / `is_active` | 地图模板 |
+| `map_tiles` | `map_id`(FK) / `position`(0-39) / `name` / `tile_type` / `tile_group` / `group_color` / `price` / `build_cost` / `rent_0`…`rent_5` / `tax_amount` / `tax_is_percent` / `icon` / `description` | 唯一约束 `(map_id, position)` |
+| `map_station_rent` | `map_id` / `owned_count`(1-4) / `rent` | 唯一约束 `(map_id, owned_count)` |
+| `map_utility_rent` | `map_id` / `owned_count`(1-2) / `dice_multiplier` | 唯一约束 `(map_id, owned_count)` |
+| `map_cards` | `map_id` / `card_type`(CHANCE / FATE) / `card_id`(如 C01、F05) / `name` / `effect_type` / `effect_value` / `description` | 唯一约束 `(map_id, card_type, card_id)` |
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | - |
-| game_id | BIGINT | FK→game_records.id | 对局ID |
-| user_id | BIGINT | FK→users.id, NULL | 用户ID(AI为NULL) |
-| player_name | VARCHAR(50) | NOT NULL | 玩家显示名 |
-| is_ai | BOOLEAN | NOT NULL | 是否AI |
-| ai_difficulty | TINYINT | NULL | AI难度 |
-| turn_order | TINYINT | NOT NULL | 出场顺序 |
-| final_cash | INT | NOT NULL | 最终现金 |
-| final_assets | INT | NOT NULL | 最终总资产 |
-| rank | TINYINT | NOT NULL | 排名 |
-| is_bankrupt | BOOLEAN | DEFAULT FALSE | 是否破产 |
-| bankrupt_turn | INT | NULL | 破产回合 |
+**Redis 键命名**（运行时状态）
 
-#### 6.2.6 user_stats - 用户统计表
-
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| user_id | BIGINT | PK, FK→users.id | 用户ID |
-| total_games | INT | DEFAULT 0 | 总对局数 |
-| total_wins | INT | DEFAULT 0 | 胜场数 |
-| total_bankruptcies | INT | DEFAULT 0 | 破产次数 |
-| total_rent_collected | BIGINT | DEFAULT 0 | 累计租金收入 |
-| total_rent_paid | BIGINT | DEFAULT 0 | 累计租金支出 |
-| best_rank | TINYINT | NULL | 最佳排名 |
-| win_streak | INT | DEFAULT 0 | 当前连胜 |
-| best_win_streak | INT | DEFAULT 0 | 最佳连胜 |
-| score | INT | DEFAULT 0 | 积分(排行榜用) |
-| updated_at | DATETIME | DEFAULT NOW | 更新时间 |
-
-#### 6.2.7 game_turn_logs - 回合日志表
-
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | - |
-| game_id | BIGINT | FK→game_records.id | 对局ID |
-| turn_number | INT | NOT NULL | 回合号 |
-| player_id | BIGINT | NOT NULL | 玩家ID |
-| action_type | VARCHAR(50) | NOT NULL | 操作类型 |
-| action_data | JSON | NOT NULL | 操作详情 |
-| dice_values | VARCHAR(10) | NULL | 骰子点数(如"[3,5]") |
-| created_at | DATETIME | DEFAULT NOW | 记录时间 |
-
-#### 6.2.8 friendships - 好友关系表
-
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| id | BIGINT | PK, AUTO_INCREMENT | - |
-| user_id | BIGINT | FK→users.id | 发起者 |
-| friend_id | BIGINT | FK→users.id | 接收者 |
-| status | TINYINT | DEFAULT 0 | 0=待确认 1=已接受 2=已拒绝 |
-| created_at | DATETIME | DEFAULT NOW | 创建时间 |
+| 键 | 内容 |
+|----|------|
+| `room:{room_id}` | 房间运行时状态 |
+| `room:code:{room_code}` | 房间码 → 房间 ID 映射 |
+| `room:pwd:{room_id}` | 房间密码校验 |
+| `room:list` | 等待中房间列表 |
+| `game:{room_id}` | `GameState` 完整状态（JSON） |
+| `game:{room_id}:cards` | 本局卡组 |
+| `chat:{room_id}` / `chat:{room_id}:seq` | 房间聊天消息与序号 |
+| `map:{map_id}` | 地图模板缓存 |
+| `token:access:{jti}` / `token:refresh:{user_id}` / `token:blacklist:{jti}` | Token 会话与黑名单 |
 
 ---
 
-## 七、API 接口设计
+## 八、枚举与字段口径
 
-### 7.1 REST API
+### 8.1 对局阶段 `GamePhase`
 
-> Base URL: `/api/v1`
-> 所有需认证的接口在 Header 中携带: `Authorization: Bearer <access_token>`
+`TURN_START`、`WAIT_ROLL`、`ROLLING`、`MOVING`、`TILE_EFFECT`、`WAIT_DECISION`、`FREE_ACTION`、`TURN_END`、`AUCTION`、`BANKRUPTCY`、`GAME_OVER`
 
-#### 7.1.1 认证接口
+> 代码中**不存在** `RESOLVED` 阶段，决策结果直接由 `WAIT_DECISION` 流转至 `FREE_ACTION` / `TURN_END`。
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| POST | `/auth/register` | 用户注册 | 否 |
-| POST | `/auth/login` | 用户登录 | 否 |
-| POST | `/auth/refresh` | 刷新Token | 否(需Refresh Token) |
-| POST | `/auth/logout` | 用户登出 | 是 |
-| GET | `/auth/me` | 获取当前用户信息 | 是 |
-| PUT | `/auth/password` | 修改密码 | 是 |
-| PUT | `/auth/profile` | 修改昵称/头像 | 是 |
+### 8.2 地块类型 `TileType`
 
-**注册请求/响应示例：**
+`START`、`PROPERTY`、`STATION`、`UTILITY`、`CHANCE`、`FATE`、`TAX`、`JAIL`、`PARKING`、`GO_TO_JAIL`
 
-```json
-// POST /api/v1/auth/register
-// Request
-{
-  "username": "player1",
-  "password": "MyPassword123",
-  "nickname": "玩家一号"
-}
-// Response 201
-{
-  "id": 1,
-  "username": "player1",
-  "nickname": "玩家一号",
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
-  "expires_in": 3600
-}
-```
+### 8.3 结束原因 `EndReason`
 
-#### 7.1.2 房间接口
+| 值 | 含义 |
+|----|------|
+| `last_standing` | 仅剩一名未破产玩家 |
+| `turn_limit` | 达到回合上限（`max_turns` 默认 100） |
+| `vote_end` | 投票结束（枚举预留，当前无触发入口；投降走破产结算，不产生该值） |
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| GET | `/rooms` | 获取房间列表 | 是 |
-| POST | `/rooms` | 创建房间 | 是 |
-| GET | `/rooms/{room_id}` | 获取房间详情 | 是 |
-| POST | `/rooms/join` | 加入房间 | 是 |
-| POST | `/rooms/{room_id}/leave` | 离开房间 | 是 |
-| POST | `/rooms/{room_id}/ready` | 准备/取消准备 | 是 |
-| POST | `/rooms/{room_id}/ai` | 添加AI | 是(房主) |
-| DELETE | `/rooms/{room_id}/ai/{ai_id}` | 移除AI | 是(房主) |
-| DELETE | `/rooms/{room_id}/players/{user_id}` | 踢出玩家 | 是(房主) |
-| PUT | `/rooms/{room_id}/config` | 修改房间设置 | 是(房主) |
+### 8.4 AI 难度与玩家标识
 
-**创建房间请求/响应示例：**
-
-```json
-// POST /api/v1/rooms
-// Request
-{
-  "name": "欢乐大富翁",
-  "password": "123456",
-  "max_players": 6,
-  "config": {
-    "initial_cash": 1500,
-    "pass_go_bonus": 200,
-    "turn_timeout": 30,
-    "auction_enabled": true,
-    "bankruptcy_enabled": true
-  }
-}
-// Response 201
-{
-  "id": 1,
-  "room_code": "A3F8K2",
-  "name": "欢乐大富翁",
-  "host_id": 1,
-  "max_players": 6,
-  "status": 0,
-  "config": { ... },
-  "players": [
-    { "user_id": 1, "nickname": "玩家一号", "is_ready": true, "is_ai": false }
-  ]
-}
-```
-
-#### 7.1.3 游戏接口
-
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| GET | `/games/{game_id}` | 获取对局信息 | 是 |
-| GET | `/games/{game_id}/log` | 获取对局日志 | 是 |
-| POST | `/games/{game_id}/surrender` | 投降 | 是 |
-
-> 游戏内的实时操作（掷骰子、买地、建造等）通过 WebSocket 进行，不走 REST API。
-
-#### 7.1.4 用户数据接口
-
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| GET | `/users/{user_id}/stats` | 获取用户统计 | 是 |
-| GET | `/users/{user_id}/records` | 获取对战记录 | 是 |
-| GET | `/leaderboard` | 获取排行榜 | 是 |
-| GET | `/users/me/records` | 获取自己的对战记录 | 是 |
-
-#### 7.1.5 统一响应格式
-
-```json
-// 成功
-{
-  "code": 0,
-  "message": "success",
-  "data": { ... }
-}
-// 失败
-{
-  "code": 40001,
-  "message": "用户名或密码错误",
-  "data": null
-}
-```
-
-**错误码定义：**
-
-| 错误码范围 | 说明 |
-|------------|------|
-| 0 | 成功 |
-| 10001-19999 | 认证错误 |
-| 20001-29999 | 房间错误 |
-| 30001-39999 | 游戏错误 |
-| 40001-49999 | 用户错误 |
-| 50000+ | 服务器错误 |
-
-### 7.2 WebSocket 消息协议
-
-> 连接地址：`ws://host/ws/game?token=<access_token>`
-
-#### 7.2.1 消息通用格式
-
-```json
-{
-  "type": "game.action",
-  "data": { ... },
-  "seq": 42,
-  "timestamp": 1700000000
-}
-```
-
-#### 7.2.2 客户端 → 服务器消息
-
-| type | data | 说明 | 时机 |
-|------|------|------|------|
-| `room.ready` | `{ ready: bool }` | 准备/取消 | 房间等待阶段 |
-| `room.start` | `{}` | 开始游戏 | 房主，全员准备后 |
-| `game.roll_dice` | `{}` | 掷骰子 | 自己回合 |
-| `game.buy_property` | `{ tile_id: int }` | 购买地产 | 停在无主地产 |
-| `game.decline_buy` | `{ tile_id: int }` | 放弃购买 | 停在无主地产 |
-| `game.build` | `{ tile_id: int, count: int }` | 建造房屋 | 自由行动阶段 |
-| `game.demolish` | `{ tile_id: int }` | 拆除房屋 | 自由行动阶段 |
-| `game.mortgage` | `{ tile_id: int }` | 抵押地产 | 自由行动阶段 |
-| `game.redeem` | `{ tile_id: int }` | 赎回地产 | 自由行动阶段 |
-| `game.end_turn` | `{}` | 结束回合 | 自由行动阶段 |
-| `game.jail_pay` | `{}` | 支付保释金 | 在监狱中 |
-| `game.jail_use_card` | `{}` | 使用免罪卡 | 在监狱中 |
-| `game.auction_bid` | `{ tile_id: int, amount: int }` | 拍卖出价 | 拍卖阶段 |
-| `game.auction_pass` | `{ tile_id: int }` | 拍卖放弃 | 拍卖阶段 |
-| `game.trade_offer` | `{ target_id: int, offer: {...} }` | 发起交易 | 自由行动阶段 |
-| `game.trade_accept` | `{ trade_id: int }` | 接受交易 | 收到交易提议 |
-| `game.trade_reject` | `{ trade_id: int }` | 拒绝交易 | 收到交易提议 |
-| `chat.send` | `{ message: string }` | 发送聊天 | 任何时候 |
-| `system.ping` | `{}` | 心跳ping | 30秒间隔 |
-
-#### 7.2.3 服务器 → 客户端消息
-
-| type | data | 说明 |
+| 字段 | 取值 | 说明 |
 |------|------|------|
-| `state.snapshot` | 完整游戏状态 | 全量同步（重连/回合开始） |
-| `state.update` | 变更字段 | 增量同步 |
-| `game.dice_result` | `{ dice: [3, 5], total: 8, is_double: true }` | 骰子结果 |
-| `game.player_moved` | `{ player_id, from, to, passed_go: bool }` | 棋子移动 |
-| `game.tile_event` | `{ tile_id, event_type, data }` | 地块事件 |
-| `game.rent_paid` | `{ from_id, to_id, amount, tile_id }` | 租金支付 |
-| `game.property_bought` | `{ player_id, tile_id, price }` | 地产购买 |
-| `game.building_built` | `{ player_id, tile_id, level }` | 房屋建造 |
-| `game.card_drawn` | `{ card_id, card_name, effect }` | 抽卡结果 |
-| `game.auction_start` | `{ tile_id, start_price }` | 拍卖开始 |
-| `game.auction_update` | `{ tile_id, current_bid, bidder_id }` | 拍卖更新 |
-| `game.auction_end` | `{ tile_id, winner_id, final_price }` | 拍卖结束 |
-| `game.trade_received` | `{ trade_id, from_id, offer }` | 收到交易提议 |
-| `game.trade_completed` | `{ trade_id, ... }` | 交易完成 |
-| `game.player_bankrupt` | `{ player_id, creditor_id }` | 玩家破产 |
-| `game.turn_change` | `{ current_player_id, turn_number }` | 回合切换 |
-| `game.turn_timeout_warning` | `{ seconds_left: int }` | 回合超时警告 |
-| `game.over` | `{ winner_id, rankings: [...] }` | 游戏结束 |
-| `chat.message` | `{ player_id, nickname, message, timestamp }` | 聊天消息 |
-| `system.pong` | `{}` | 心跳pong |
-| `system.error` | `{ code, message }` | 错误消息 |
-| `system.player_disconnected` | `{ player_id }` | 玩家断线 |
-| `system.player_reconnected` | `{ player_id }` | 玩家重连 |
+| `ai_difficulty` | `easy` / `medium` / `hard` | 对应 `EasyAI` / `MediumAI` / `HardAI`，工厂 `AIPlayerFactory.available_difficulties()` |
+| `user_id` | 正数=真人，负数=AI | `game_records.winner_id`、`game_players.user_id` 同口径 |
+| `is_spectator` | 布尔 | 观战者仅接收，不能发送被拦截的 16 类操作 |
 
-#### 7.2.4 游戏状态快照结构
+### 8.5 卡片效果 `effect_type`
 
-```json
-{
-  "type": "state.snapshot",
-  "data": {
-    "game_id": 1,
-    "turn_number": 15,
-    "current_player_id": 3,
-    "phase": "FREE_ACTION",
-    "players": [
-      {
-        "id": 1,
-        "nickname": "玩家一号",
-        "cash": 1200,
-        "position": 15,
-        "is_bankrupt": false,
-        "is_in_jail": false,
-        "jail_turns": 0,
-        "properties": [1, 3, 6, 8],
-        "get_out_of_jail_cards": 0,
-        "is_ai": false,
-        "is_connected": true
-      }
-    ],
-    "board": {
-      "tiles": [
-        { "id": 0, "type": "START", "owner_id": null },
-        { "id": 1, "type": "PROPERTY", "owner_id": 1, "build_level": 2, "is_mortgaged": false },
-        ...
-      ]
-    },
-    "dice": { "last_values": [3, 5], "last_total": 8 },
-    "deck_info": {
-      "chance_remaining": 7,
-      "fate_remaining": 5
-    }
-  }
-}
-```
+| 值 | 语义 | 参数 |
+|----|------|------|
+| `move_to_position` | 移动到指定格（可收过路费） | `effect_value` = 目标 position |
+| `move_forward` | 前进 N 格 | N |
+| `move_backward` | 后退 N 格（不收过路费） | N |
+| `move_to_nearest_station` | 移动到最近车站，需付双倍租金 | — |
+| `gain_money` | 从银行获得 | 金额 |
+| `lose_money` | 向银行支付 | 金额 |
+| `pay_per_house` | 按房屋/酒店数量支付 | 单栋金额（酒店按更高档） |
+| `gain_from_all` | 其他每位玩家支付给本人 | 单人金额 |
+| `go_to_jail` | 直接入狱 | — |
+| `get_out_of_jail` | 获得免罪卡 | — |
+
+**内置卡组**：机会卡 `C01`-`C10`、命运卡 `F01`-`F10`（名称、效果与数值以 `scripts/seed_classic_map.py` 为准）。
+
+### 8.6 租金与资产口径
+
+- **垄断加成**：拥有同组全部地块且建筑等级为 0 时，租金 ×2。
+- **车站**：按持有数量查 `map_station_rent`。
+- **设施**：租金 = 骰子点数 × `map_utility_rent.dice_multiplier`（1 座 ×4、2 座 ×10）。
+- **总资产**：`calculate_total_assets = 现金 + 地产价值 + 建筑投入`（已抵押地产按规则折价），用于排名与结算。
+- **结算金额**：`settlement_amount = 最终总资产 - 初始资金(1500)`，正值盈利、负值亏损。
 
 ---
 
-## 八、前端页面设计
+## 九、环境变量
 
-### 8.1 页面路由
+### 9.1 后端（`gridgo-server/.env`，模板见 `.env.example`）
 
-| 路径 | 页面 | 说明 | 认证 |
-|------|------|------|------|
-| `/` | 首页/大厅 | 房间列表、创建房间、排行榜 | 游客可看 |
-| `/login` | 登录页 | 用户名密码登录 | 否 |
-| `/register` | 注册页 | 用户注册 | 否 |
-| `/room/:code` | 房间页 | 等待大厅、玩家列表、准备 | 是 |
-| `/game/:id` | 游戏页 | 棋盘、玩家面板、操作区 | 是 |
-| `/profile` | 个人中心 | 战绩、统计、设置 | 是 |
-| `/leaderboard` | 排行榜 | 积分/胜率排名 | 游客可看 |
-| `/records/:id` | 对局详情 | 回合日志、最终排名 | 是 |
+| 变量 | 代码默认值（`app/core/config.py`） | 说明 |
+|------|-----------------------------------|------|
+| `APP_NAME` | `GridGo` | 应用名 |
+| `APP_VERSION` | `0.1.0` | 版本口径（文档与前端展示统一使用） |
+| `DEBUG` | `True` | 调试开关 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `PORT` | `8001` | 服务端口 |
+| `DATABASE_URL` | `postgresql+asyncpg://gridgo:gridgo123@127.0.0.1:3307/gridgo` | PostgreSQL 连接串 |
+| `DATABASE_ECHO` | `False` | SQL 回显 |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串 |
+| `JWT_SECRET_KEY` | `gridgo-secret-key-change-in-production` | 生产必须修改 |
+| `JWT_ALGORITHM` | `HS256` | 签名算法 |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440`（1 天） | 注意 `.env.example` 示例值为 `60`，以实际 `.env` 为准 |
+| `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | 刷新 Token 有效期 |
+| `CORS_ORIGINS` | `["http://localhost:3000","http://127.0.0.1:3000"]` | 允许来源（JSON 数组） |
+| `GAME_INITIAL_CASH` | `1500` | 初始现金 |
+| `GAME_PASS_GO_BONUS` | `200` | 经过起点奖励 |
+| `GAME_TURN_TIMEOUT` | `30` | 回合超时（秒） |
+| `GAME_MAX_PLAYERS` | `8` | 单房最大玩家数 |
+| `GAME_MAX_TURNS` | `100` | 单局最大回合数 |
 
-### 8.2 游戏主界面布局
+### 9.2 Docker（`docker/.env.docker`）
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  顶部栏: Logo | 当前回合: 玩家3 第15回合 | 倒计时: 25s | 设置 │
-├────────────┬─────────────────────────────────┬───────────┤
-│            │                                 │           │
-│  玩家面板   │         棋盘区域 (Canvas)         │  操作面板  │
-│            │                                 │           │
-│  ┌──────┐  │   ┌────┬────┬────┬────┬────┐   │  ┌─────┐  │
-│  │玩家1  │  │   │ 00 │ 01 │ 02 │ .. │ 10 │   │  │骰子  │  │
-│  │💰1200│  │   ├────┼────┴────┴────┼────┤   │  │ ⚀ ⚄  │  │
-│  │📍15   │  │   │ 39 │   中心区域   │ 11 │   │  │ = 5  │  │
-│  └──────┘  │   ├────┤              ├────┤   │  └─────┘  │
-│  ┌──────┐  │   │ .. │              │ .. │   │           │
-│  │玩家2  │  │   ├────┼────┬────┬────┼────┤   │  ┌─────┐  │
-│  │💰800 │  │   │ 30 │ .. │ .. │ .. │ 20 │   │  │操作   │  │
-│  │📍7   │  │   └────┴────┴────┴────┴────┘   │  │按钮区 │  │
-│  └──────┘  │                                 │  └─────┘  │
-│  ...       │                                 │           │
-│            │                                 │  ┌─────┐  │
-│            │                                 │  │聊天   │  │
-│            │                                 │  │窗口   │  │
-│            │                                 │  └─────┘  │
-├────────────┴─────────────────────────────────┴───────────┤
-│  底部: 事件日志 | 最新消息: "玩家1购买了朝阳路"              │
-└──────────────────────────────────────────────────────────┘
-```
+| 变量 | 值 | 说明 |
+|------|-----|------|
+| `POSTGRES_PASSWORD` | `gridgo123` | PostgreSQL 密码 |
+| `POSTGRES_PORT` | `3307` | 宿主机映射端口（宿主 3307 → 容器 5432） |
+| `REDIS_PORT` | `6380` | 宿主机映射端口（避开本机 6379） |
+| `SERVER_PORT` | `8001` | 后端映射端口 |
+| `WEB_PORT` | `80` | 前端 Nginx 映射端口 |
+| `JWT_*` | 同后端 | 容器内 JWT 配置 |
+| `CORS_ORIGINS` | `["http://localhost","http://localhost:80","http://localhost:3000"]` | 容器场景来源 |
+| `GAME_*` | 同后端 | 游戏参数 |
 
-#### 各区域说明
+### 9.3 前端
 
-| 区域 | 内容 | 交互 |
+前端通过相对路径 `/api`、`/ws` 访问后端，**无需环境变量**；开发环境由 `vite.config.ts` 代理到 `http://localhost:8001`，容器环境由 Nginx 反代。
+
+---
+
+## 十、运行与部署
+
+完整命令与环境要求见仓库根目录 [README.md](../README.md)，此处仅列形态：
+
+| 形态 | 入口 | 说明 |
 |------|------|------|
-| **顶部栏** | 回合信息、倒计时、设置入口 | 倒计时最后5秒高亮闪烁 |
-| **左侧玩家面板** | 所有玩家头像、昵称、现金、位置、状态 | 当前回合玩家高亮，破产玩家置灰 |
-| **中央棋盘** | Canvas渲染的40格棋盘 | 点击地块查看详情（价格、租金、归属） |
-| **右侧操作面板** | 骰子区 + 操作按钮 + 聊天 | 根据当前阶段动态显示可用操作 |
-| **底部日志** | 事件日志滚动展示 | 最近5条消息 |
-
-### 8.3 操作按钮动态显示逻辑
-
-| 阶段 | 显示按钮 |
-|------|----------|
-| WAIT_ROLL | [掷骰子] |
-| 在监狱中 | [支付保释金50] [使用免罪卡] [掷骰子尝试双数] |
-| 停在无主地产 | [购买(¥60)] [放弃] |
-| 停在自己地产 | [建造房屋(¥50)] |
-| FREE_ACTION | [建造] [拆除] [抵押] [赎回] [交易] [结束回合] |
-| 拍卖中 | [出价+10] [自定义出价] [放弃] |
-| 非自己回合 | (按钮禁用，仅可聊天) |
-
-### 8.4 关键交互动画
-
-| 动画 | 实现 | 时长 |
-|------|------|------|
-| 骰子翻滚 | GSAP 3D旋转 + 随机面切换 | 1.2s |
-| 棋子移动 | GSAP 沿路径逐格跳动 | 0.3s/格 |
-| 地产购买 | 金币飞出 + 地契弹窗 | 0.8s |
-| 租金支付 | 金币从付款方飞向收款方 | 0.6s |
-| 卡片抽取 | 卡片从牌堆飞出翻转 | 0.8s |
-| 破产 | 玩家头像置灰 + 破产横幅 | 1.0s |
-| 回合切换 | 高亮框从上一玩家移到当前玩家 | 0.4s |
+| 本地一键启动 | `start.bat` | 检查 Python/Node/pnpm → 建 venv 装依赖 → 并行启动后端（8001）与前端（3000） |
+| 本地一键停止 | `stop.bat` | 结束 8001 / 3000 端口进程 |
+| 手动后端 | `uvicorn app.main:app --reload --port 8001` | 需先执行 Alembic 迁移与地图种子 |
+| 手动前端 | `pnpm dev` | 默认 3000 |
+| Docker | `docker compose up -d --build` | 四服务：postgres / redis / server / web；后端容器启动即执行 `alembic upgrade head` + 地图种子 + uvicorn |
+| 端口占用排查 | `clear8001.md` | 8001 端口被占用时的查杀步骤（运维说明） |
 
 ---
 
-## 九、非功能需求
+## 十一、测试
 
-### 9.1 性能要求
-
-| 指标 | 目标 |
-|------|------|
-| WebSocket消息延迟 | < 100ms (同区域) |
-| 骰子动画到结果确认 | < 1.5s |
-| 棋子移动动画 | < 3s (最长一圈40格) |
-| 页面首屏加载 | < 2s |
-| Canvas渲染帧率 | ≥ 60fps (PC), ≥ 30fps (移动端) |
-| 单服务器并发房间 | ≥ 100 |
-| API响应时间 | < 200ms (P95) |
-
-### 9.2 可靠性要求
-
-| 要求 | 方案 |
-|------|------|
-| 游戏状态不丢失 | Redis持久化 + 定期快照落库 |
-| 断线可恢复 | 30秒~3分钟重连窗口 + AI暂代 |
-| 消息不丢 | WebSocket消息序列号(seq) + 缺失重传 |
-| 数据一致性 | 每房间一个asyncio锁，串行处理操作 |
-
-### 9.3 安全性要求
-
-| 要求 | 方案 |
-|------|------|
-| 密码安全 | bcrypt哈希存储 |
-| 防作弊 | Server Authoritative，前端仅渲染 |
-| 防重放攻击 | 消息seq递增校验 |
-| 防SQL注入 | SQLAlchemy参数化查询 |
-| CORS限制 | 白名单域名 |
-| 速率限制 | API限流(如登录5次/分钟) |
-
-### 9.4 兼容性要求
-
-| 平台 | 要求 |
-|------|------|
-| Chrome 100+ | 完全支持 |
-| Firefox 100+ | 完全支持 |
-| Safari 15+ | 完全支持 |
-| Edge 100+ | 完全支持 |
-| 移动端浏览器 | 基本可用（触摸操作适配） |
-| 分辨率 | 最低 1280×720，推荐 1920×1080 |
+| 层 | 框架 | 位置 / 命令 |
+|----|------|-------------|
+| 后端单元测试 | pytest / pytest-asyncio | `gridgo-server/tests/unit`（引擎拍卖规则、重连、交易结算契约、回合日志与租金统计、WS 协议契约、迁移） |
+| 后端集成测试 | pytest | `gridgo-server/tests/integration/test_ai_full_game.py`（AI 全流程对局） |
+| 前端测试 | Vitest（jsdom） | `gridgo-web`：`pnpm test`（单次）/ `pnpm test:watch` |
+| 代码检查 | Ruff（Python） | `ruff check .` |
 
 ---
 
-## 十、开发规范
+## 十二、已知限制与规划项
 
-### 10.1 分支管理
-
-| 分支 | 用途 |
-|------|------|
-| `main` | 生产环境稳定版本 |
-| `develop` | 开发集成分支 |
-| `feature/*` | 功能开发分支 |
-| `fix/*` | Bug修复分支 |
-| `release/*` | 发布准备分支 |
-
-### 10.2 提交规范
-
-```
-<type>(<scope>): <subject>
-
-type:   feat | fix | docs | style | refactor | test | chore
-scope:  frontend | backend | game | ai | ws | db | config
-subject: 简短描述（不超过50字）
-```
-
-示例：
-```
-feat(game): 实现掷骰子和棋子移动逻辑
-fix(ai): 修复中等AI在低现金时仍购买地产的问题
-docs(api): 补充WebSocket消息协议文档
-```
-
-### 10.3 代码规范
-
-#### 前端 (TypeScript/Vue)
-
-- 使用 ESLint + Prettier 统一格式
-- 组件使用 `<script setup lang="ts">` 语法
-- 命名：组件 PascalCase，变量/函数 camelCase，常量 UPPER_SNAKE_CASE
-- 文件命名：组件 `.vue`，工具 `.ts`，类型定义 `.ts`
-
-#### 后端 (Python)
-
-- 使用 Ruff 进行代码检查和格式化
-- 类型注解：所有函数必须标注参数和返回值类型
-- 命名：类 PascalCase，函数/变量 snake_case，常量 UPPER_SNAKE_CASE
-- 文档字符串：公开函数必须有 docstring
-
-### 10.4 测试规范
-
-| 类型 | 工具 | 覆盖率要求 |
-|------|------|------------|
-| 前端单元测试 | Vitest | ≥ 70% |
-| 后端单元测试 | pytest | ≥ 80% |
-| 游戏逻辑测试 | pytest (专门) | ≥ 90% |
-| 集成测试 | pytest + httpx | 核心流程覆盖 |
-| E2E测试 | Playwright (后续) | 关键路径覆盖 |
-
-### 10.5 迭代计划
-
-| 阶段 | 内容 | 预计周期 |
-|------|------|----------|
-| **MVP** | 单人 vs AI、基础棋盘、买地/收租、掷骰子 | 2-3 周 |
-| **V1.0** | 在线多人、房间系统、建造升级、事件卡 | 3-4 周 |
-| **V1.5** | 交易系统、聊天、断线重连、排行榜 | 2-3 周 |
-| **V2.0** | 多地图、道具系统、赛季、Docker部署 | 3-4 周 |
+| 项 | 现状 | 影响 / 后续 |
+|----|------|-------------|
+| 内置地图仅 `classic` | 数据驱动链路完整，但 `seed_classic_map.py` 只写入 classic | 新增地图需补种子数据（规划中） |
+| 音效未落地 | `howler` 已装未使用 | 规划中 |
+| 观战者不可发言 | `chat.send` 属被拦截类型 | 设计如此，如需开放需调整拦截表 |
+| `game.pass_go` 为单播消息 | 仅过路玩家可见 | 前端如需全局可见，改为广播并同步文档 |
+| 8001 端口占用 | 已有 `clear8001.md` 处置流程 | 端口被占时后端无法启动 |
+| `.env.example` 与代码默认值差异 | access token 有效期示例为 60 分钟，代码默认 1440 分钟 | 以实际 `.env` 为准，建议统一 |
+| 对局状态依赖 Redis | `game:{room_id}` 为运行权威源 | Redis 清空会丢失进行中对局（前端需重连恢复或重开） |
+*（内容由AI生成，仅供参考）*

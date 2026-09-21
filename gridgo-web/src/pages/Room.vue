@@ -1,260 +1,263 @@
 <template>
   <div class="room-page">
-    <el-container style="height: 100vh">
-      <!-- 顶栏 -->
-      <el-header>
-        <div class="flex-between w-full h-full">
-          <div>
-            <el-button text @click="handleBack">
-              <el-icon><ArrowLeft /></el-icon>
-              返回
-            </el-button>
-            <span class="ml-4 text-lg font-bold">{{ roomData?.name || '房间' }}</span>
-          </div>
-          <div>
-            <span class="mr-2">房间代码：</span>
-            <el-tag type="success" size="large" class="font-mono text-lg">{{ code }}</el-tag>
-            <el-button class="ml-2" size="small" @click="copyCode">复制</el-button>
+    <!-- 顶栏：房间票头 -->
+    <header class="room-bar">
+      <el-button text class="room-bar__back" @click="handleBack">← 返回</el-button>
+      <span class="room-bar__title">{{ roomData?.name || '房间' }}</span>
+      <span class="room-bar__code" :title="'房间代码 ' + code">{{ code }}</span>
+      <el-button size="small" @click="copyCode">复制代码</el-button>
+      <span class="room-bar__status" :data-status="roomData?.status">{{ statusText }}</span>
+      <span class="room-bar__spacer"></span>
+      <span class="room-bar__meta">
+        {{ roomData?.players.length || 0 }}/{{ roomData?.max_players || 8 }} 玩家 ·
+        观战 {{ roomData?.spectators?.length || 0 }}/{{ roomData?.max_spectators || 10 }}
+      </span>
+      <el-button size="small" type="danger" plain @click="handleLeave">离开房间</el-button>
+    </header>
+
+    <!-- 主体 -->
+    <main class="room-main" v-loading="loading">
+      <section class="room-col room-col--main">
+        <!-- 玩家席位 -->
+        <div class="room-panel room-panel--wide">
+          <header class="room-panel__head">
+            <span class="gg-kicker">SEATS · 玩家席位</span>
+            <span class="room-panel__meta gg-num">
+              {{ roomData?.players.length || 0 }}/{{ roomData?.max_players || 8 }}
+            </span>
+          </header>
+          <div class="room-panel__body">
+            <div class="seat-grid">
+              <div
+                v-for="n in seatCount"
+                :key="'seat-' + n"
+                class="seat"
+                :class="{ 'seat--empty': !playerAt(n - 1), 'seat--me': playerAt(n - 1)?.user_id === userStore.userId }"
+              >
+                <template v-if="playerAt(n - 1)">
+                  <span class="seat__no">{{ pad(n) }}</span>
+                  <span class="seat__avatar">
+                    <img v-if="playerAt(n - 1)?.avatar" :src="playerAt(n - 1)!.avatar!" alt="" />
+                    <span v-else>{{ playerAt(n - 1)!.is_ai ? 'AI' : playerAt(n - 1)!.nickname.charAt(0) }}</span>
+                  </span>
+                  <span class="seat__info">
+                    <span class="seat__name">{{ playerAt(n - 1)!.nickname }}</span>
+                    <span class="seat__tags">
+                      <el-tag v-if="playerAt(n - 1)!.is_host" type="warning" size="small">房主</el-tag>
+                      <el-tag v-if="playerAt(n - 1)!.is_ai" type="info" size="small">
+                        AI · {{ difficultyText(playerAt(n - 1)!.ai_difficulty) }}
+                      </el-tag>
+                      <el-tag
+                        v-else-if="!playerAt(n - 1)!.is_host"
+                        :type="playerAt(n - 1)!.is_ready ? 'success' : 'info'"
+                        size="small"
+                      >
+                        {{ playerAt(n - 1)!.is_ready ? '已准备' : '未准备' }}
+                      </el-tag>
+                      <el-tag v-if="playerAt(n - 1)!.user_id === userStore.userId" size="small">我</el-tag>
+                    </span>
+                  </span>
+                </template>
+                <template v-else>
+                  <span class="seat__no">{{ pad(n) }}</span>
+                  <span class="seat__empty">空席 · 等待玩家</span>
+                </template>
+              </div>
+            </div>
+
+            <p class="room-panel__hint">
+              把房间代码 <b class="gg-num">{{ code }}</b> 发给好友即可邀请入座
+            </p>
           </div>
         </div>
-      </el-header>
 
-      <!-- 主体 -->
-      <el-main v-loading="loading" class="room-main">
-        <el-row :gutter="20" class="room-body">
-          <!-- 左侧：玩家 + 操作 -->
-          <el-col :span="8">
-            <!-- 玩家列表 -->
-            <el-card class="player-card">
-              <template #header>
-                <div class="flex-between">
-                  <span>玩家 ({{ roomData?.players.length || 0 }}/{{ roomData?.max_players || 8 }})</span>
-                  <el-tag v-if="roomData?.status === 'waiting'" type="info">等待中</el-tag>
-                  <el-tag v-else-if="roomData?.status === 'playing'" type="success">游戏中</el-tag>
-                  <el-tag v-else-if="roomData?.status === 'finished'" type="danger">已结束</el-tag>
-                </div>
-              </template>
-
-              <div class="player-list">
-                <div v-for="p in roomData?.players || []" :key="p.user_id" class="player-item">
-                  <div class="flex items-center gap-2">
-                    <el-avatar :size="28" :src="p.avatar || undefined">
-                      {{ p.is_ai ? '🤖' : p.nickname.charAt(0) }}
-                    </el-avatar>
-                    <span class="player-name">{{ p.nickname }}</span>
-                    <el-tag v-if="p.is_host" type="warning" size="small">房主</el-tag>
-                    <el-tag v-if="p.is_ai" type="info" size="small">
-                      AI · {{ difficultyText(p.ai_difficulty) }}
-                    </el-tag>
-                  </div>
-                  <!-- 右侧只显示准备状态（房主和AI不显示） -->
-                  <el-tag v-if="!p.is_host && !p.is_ai && p.is_ready" type="success" size="small">已准备</el-tag>
-                  <el-tag v-else-if="!p.is_host && !p.is_ai && !p.is_ready" type="info" size="small">未准备</el-tag>
-                </div>
+        <!-- 观战席 -->
+        <div class="room-panel">
+          <header class="room-panel__head">
+            <span class="gg-kicker">SPECTATE · 观战席</span>
+            <span class="room-panel__meta gg-num">
+              {{ roomData?.spectators?.length || 0 }}/{{ roomData?.max_spectators || 10 }}
+            </span>
+          </header>
+          <div class="room-panel__body">
+            <div v-if="(roomData?.spectators?.length ?? 0) > 0" class="watch-list">
+              <div v-for="s in roomData?.spectators || []" :key="s.user_id" class="watch-row">
+                <span class="watch-row__name">{{ s.nickname }}</span>
+                <el-tag v-if="s.is_host" type="warning" size="small">房主</el-tag>
+                <el-tag v-if="s.user_id === userStore.userId" size="small">我</el-tag>
               </div>
-            </el-card>
+            </div>
+            <div v-else class="room-empty">
+              <span class="room-empty__mark">◌</span>
+              <span>暂无观战者</span>
+            </div>
+          </div>
+        </div>
 
-            <!-- 观战者列表 -->
-            <el-card v-if="(roomData?.spectators?.length ?? 0) > 0" class="mt-4">
-              <template #header>
-                <span>👀 观战者 ({{ roomData?.spectators?.length || 0 }}/{{ roomData?.max_spectators || 10 }})</span>
-              </template>
-              <div class="spectator-list">
-                <div v-for="s in roomData?.spectators || []" :key="s.user_id" class="spectator-item">
-                  <div class="flex items-center gap-2">
-                    <el-avatar :size="24" :src="s.avatar || undefined">
-                      {{ s.nickname.charAt(0) }}
-                    </el-avatar>
-                    <span class="spectator-name">{{ s.nickname }}</span>
-                    <el-tag v-if="s.is_host" type="warning" size="small">房主</el-tag>
-                    <el-tag v-if="s.user_id === userStore.userId" type="info" size="small">我</el-tag>
-                  </div>
-                  <el-tag type="info" size="small">👀 观战</el-tag>
-                </div>
-              </div>
-            </el-card>
+        <!-- 操作台 -->
+        <div class="room-panel">
+          <header class="room-panel__head">
+            <span class="gg-kicker">ACTIONS · 操作台</span>
+            <span class="room-panel__meta">{{ roleText }}</span>
+          </header>
+          <div class="room-panel__body room-panel__body--ops">
+            <!-- 已结束 -->
+            <template v-if="roomData?.status === 'finished'">
+              <div class="ops-note ops-note--danger">本局已结束 · 获胜者 {{ winnerNickname }}</div>
+              <el-button v-if="isHost" type="primary" class="ops-btn" :loading="resetLoading" @click="handleResetRoom">
+                返回准备阶段
+              </el-button>
+              <p v-else class="ops-hint">等待房主重置房间</p>
+            </template>
 
-            <!-- 操作区 -->
-            <el-card class="mt-4">
-              <div class="flex-col gap-3">
-                <!-- 游戏已结束 -->
-                <template v-if="roomData?.status === 'finished'">
-                  <el-tag type="danger" size="large" class="w-full text-center" style="justify-content: center">🏁 游戏已结束</el-tag>
-                  <div class="gameover-summary">
-                    <div class="gameover-winner" v-if="roomData?.players?.length">
-                      <span>🏆 获胜者：{{ winnerNickname }}</span>
-                    </div>
-                  </div>
-                  <el-button v-if="isHost" type="primary" size="large" class="w-full" :loading="resetLoading" @click="handleResetRoom">
-                    🔄 返回准备阶段
-                  </el-button>
-                  <p v-else class="text-center text-gray-400 text-sm">等待房主重置房间</p>
-                </template>
+            <!-- 进行中 -->
+            <template v-else-if="roomData?.status === 'playing'">
+              <div class="ops-note ops-note--ok">对局进行中</div>
+              <el-button type="primary" class="ops-btn" @click="handleEnterGame">进入游戏</el-button>
+            </template>
 
-                <!-- 游戏进行中 -->
-                <template v-else-if="roomData?.status === 'playing'">
-                  <el-tag type="success" size="large" class="w-full text-center" style="justify-content: center">🎮 游戏进行中</el-tag>
-                  <el-button type="primary" size="large" class="w-full" @click="handleEnterGame">
-                    🖥️ 进入游戏
-                  </el-button>
-                </template>
-
-                <!-- 等待中状态的操作 -->
-                <template v-else>
-                  <!-- 房主专属操作（无论玩家还是观战者） -->
-                  <template v-if="isHost">
-                    <el-button
-                      type="primary"
-                      size="large"
-                      class="w-full"
-                      :disabled="!canStart"
-                      :loading="startLoading"
-                      @click="handleStart"
-                    >
-                      🎮 开始游戏
-                    </el-button>
-                    <p v-if="!canStart" class="text-center text-gray-400 text-sm">
-                      {{ startHint }}
-                    </p>
-                    <el-button size="large" class="w-full" @click="showSettingsDialog = true">
-                      ⚙️ 房间设置
-                    </el-button>
-                  </template>
-
-                  <!-- 观战者操作 -->
-                  <template v-if="isSpectator">
-                    <el-tag type="info" size="large" class="w-full text-center" style="justify-content: center">👀 观战模式</el-tag>
-                    <p class="text-center text-gray-400 text-sm">你正在观战，无法参与游戏操作</p>
-                    <el-button
-                      v-if="(roomData?.players.length ?? 0) < (roomData?.max_players ?? 8)"
-                      type="primary"
-                      plain
-                      size="large"
-                      class="w-full"
-                      :loading="switchRoleLoading"
-                      @click="handleSwitchToPlayer"
-                    >
-                      🎮 加入玩家席
-                    </el-button>
-                  </template>
-
-                  <!-- 非房主玩家操作 -->
-                  <template v-if="!isHost && !isSpectator">
-                    <el-button
-                      :type="amReady ? 'success' : 'default'"
-                      size="large"
-                      class="w-full"
-                      :loading="readyLoading"
-                      @click="handleToggleReady"
-                    >
-                      {{ amReady ? '✅ 已准备' : '☝️ 点击准备' }}
-                    </el-button>
-                  </template>
-
-                  <!-- 切换为观战（仅玩家可操作） -->
-                  <el-button
-                    v-if="!isSpectator"
-                    type="info"
-                    plain
-                    size="large"
-                    class="w-full"
-                    :loading="switchRoleLoading"
-                    @click="handleSwitchToSpectator"
-                  >
-                    👀 切换为观战
-                  </el-button>
-                </template>
-
-                <!-- 离开 -->
-                <el-button type="danger" plain size="large" class="w-full" @click="handleLeave">
-                  离开房间
+            <!-- 等待中 -->
+            <template v-else>
+              <template v-if="isHost">
+                <el-button
+                  type="primary"
+                  class="ops-btn"
+                  :disabled="!canStart"
+                  :loading="startLoading"
+                  @click="handleStart"
+                >
+                  开始游戏
                 </el-button>
-              </div>
-            </el-card>
-
-            <!-- 房间信息 -->
-            <el-card class="mt-4">
-              <template #header>房间信息</template>
-              <p>房间名：{{ roomData?.name }}</p>
-              <p>最大人数：{{ roomData?.max_players }}</p>
-              <p>地图：{{ mapLabel }}</p>
-              <p>AI 数量：{{ roomData?.ai_count ?? 0 }}</p>
-              <p v-if="(roomData?.ai_count ?? 0) > 0">AI 难度：{{ difficultyText(roomData?.ai_difficulty) }}</p>
-              <p>房间代码：<span class="font-mono font-bold">{{ code }}</span></p>
-            </el-card>
-          </el-col>
-
-          <!-- 右侧：游戏结果 / 聊天区 -->
-          <el-col :span="16">
-            <!-- 游戏结束回顾 -->
-            <el-card v-if="roomData?.status === 'finished' && roomStore.gameOverData" class="gameover-card mb-4">
-              <template #header>
-                <div class="flex-between">
-                  <span>🏆 游戏结果</span>
-                  <el-tag type="info" size="small">{{ roomStore.gameOverData.total_turns }} 回合</el-tag>
-                </div>
-              </template>
-              <div class="gameover-rankings">
-                <div
-                  v-for="(r, i) in roomStore.gameOverData.rankings"
-                  :key="r.user_id"
-                  class="gameover-rank-row"
-                  :class="{ 'rank-row-me': r.user_id === userStore.userId }"
-                >
-                  <span class="rank-pos">{{ ['🥇', '🥈', '🥉'][i] || `#${r.rank}` }}</span>
-                  <span class="rank-name">{{ r.is_ai ? '🤖 ' : '' }}{{ r.nickname }}</span>
-                  <span class="rank-assets">¥{{ r.total_assets.toLocaleString() }}</span>
-                  <el-tag v-if="r.is_bankrupt" type="danger" size="small">破产</el-tag>
-                </div>
-              </div>
-            </el-card>
-
-            <el-card class="chat-card">
-              <template #header>
-                <span>💬 聊天</span>
+                <p v-if="!canStart" class="ops-hint">{{ startHint }}</p>
+                <el-button class="ops-btn" @click="showSettingsDialog = true">房间设置</el-button>
               </template>
 
-              <!-- 消息列表 -->
-              <div ref="chatContainer" class="chat-messages" @scroll="onChatScroll">
-                <div v-if="chatLoading" class="chat-loading">
-                  <el-icon class="is-loading"><Loading /></el-icon>
-                  加载中...
-                </div>
-                <div v-if="hasMoreMessages" class="load-more" @click="loadOlderMessages">
-                  ↑ 加载更早的消息
-                </div>
-                <div v-if="!chatLoading && messages.length === 0" class="chat-empty">
-                  暂无消息，快来打个招呼吧 👋
-                </div>
-                <div v-for="msg in messages" :key="msg.id" class="chat-msg" :class="{ 'chat-msg-self': msg.user_id === userStore.userId }">
-                  <div class="chat-msg-header">
-                    <span class="chat-msg-nickname">
-                      {{ msg.is_ai ? '🤖 ' : '' }}{{ msg.nickname }}
-                    </span>
-                    <span class="chat-msg-time">{{ formatTime(msg.created_at) }}</span>
-                  </div>
-                  <div class="chat-msg-content">{{ msg.content }}</div>
-                </div>
-              </div>
-
-              <!-- 输入区 -->
-              <div class="chat-input">
-                <el-input
-                  v-model="chatInput"
-                  placeholder="输入消息..."
-                  maxlength="500"
-                  @keyup.enter="handleSendMessage"
+              <template v-if="isSpectator">
+                <div class="ops-note">观战模式 · 无法参与对局操作</div>
+                <el-button
+                  v-if="(roomData?.players.length ?? 0) < (roomData?.max_players ?? 8)"
+                  type="primary"
+                  plain
+                  class="ops-btn"
+                  :loading="switchRoleLoading"
+                  @click="handleSwitchToPlayer"
                 >
-                  <template #append>
-                    <el-button :loading="sendLoading" @click="handleSendMessage">发送</el-button>
-                  </template>
-                </el-input>
+                  加入玩家席
+                </el-button>
+              </template>
+
+              <template v-if="!isHost && !isSpectator">
+                <el-button
+                  :type="amReady ? 'success' : 'primary'"
+                  class="ops-btn"
+                  :loading="readyLoading"
+                  @click="handleToggleReady"
+                >
+                  {{ amReady ? '已准备（点击取消）' : '点击准备' }}
+                </el-button>
+              </template>
+
+              <el-button
+                v-if="!isSpectator"
+                plain
+                class="ops-btn"
+                :loading="switchRoleLoading"
+                @click="handleSwitchToSpectator"
+              >
+                切换为观战
+              </el-button>
+            </template>
+          </div>
+        </div>
+
+        <!-- 房间信息 -->
+        <div class="room-panel room-panel--wide">
+          <header class="room-panel__head">
+            <span class="gg-kicker">ROOM INFO · 房间信息</span>
+          </header>
+          <div class="room-panel__body">
+            <dl class="info-grid">
+              <div class="info-grid__row"><dt>房间名称</dt><dd>{{ roomData?.name || '—' }}</dd></div>
+              <div class="info-grid__row"><dt>房间代码</dt><dd class="gg-num">{{ code }}</dd></div>
+              <div class="info-grid__row"><dt>地图</dt><dd>{{ mapLabel }}</dd></div>
+              <div class="info-grid__row"><dt>最大人数</dt><dd class="gg-num">{{ roomData?.max_players ?? '—' }}</dd></div>
+              <div class="info-grid__row"><dt>AI 数量</dt><dd class="gg-num">{{ roomData?.ai_count ?? 0 }}</dd></div>
+              <div class="info-grid__row">
+                <dt>AI 难度</dt>
+                <dd>{{ (roomData?.ai_count ?? 0) > 0 ? difficultyText(roomData?.ai_difficulty) : '—' }}</dd>
               </div>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-main>
-    </el-container>
+              <div class="info-grid__row">
+                <dt>房间密码</dt>
+                <dd>{{ roomData?.has_password ? '已设置' : '无密码' }}</dd>
+              </div>
+              <div class="info-grid__row"><dt>房主</dt><dd>{{ hostNickname }}</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <!-- 聊天列 -->
+      <aside class="room-col room-col--side">
+        <div v-if="roomData?.status === 'finished' && roomStore.gameOverData" class="room-panel room-panel--result">
+          <header class="room-panel__head">
+            <span class="gg-kicker">RESULT · 对局结果</span>
+            <span class="room-panel__meta gg-num">{{ roomStore.gameOverData.total_turns }} 回合</span>
+          </header>
+          <div class="room-panel__body">
+            <div class="result-list">
+              <div
+                v-for="(r, i) in roomStore.gameOverData.rankings"
+                :key="r.user_id"
+                class="result-row"
+                :class="{ 'result-row--me': r.user_id === userStore.userId }"
+              >
+                <span class="result-row__pos">{{ ['01', '02', '03'][i] || `#${r.rank}` }}</span>
+                <span class="result-row__name">{{ r.is_ai ? 'AI · ' : '' }}{{ r.nickname }}</span>
+                <span class="result-row__assets gg-num">¥{{ r.total_assets.toLocaleString() }}</span>
+                <el-tag v-if="r.is_bankrupt" type="danger" size="small">破产</el-tag>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="room-panel room-panel--chat">
+          <header class="room-panel__head">
+            <span class="gg-kicker">CHAT · 房间聊天</span>
+            <span class="room-panel__meta gg-num">{{ messages.length }} 条</span>
+          </header>
+
+          <div ref="chatContainer" class="chat-messages" @scroll="onChatScroll">
+            <div v-if="chatLoading" class="chat-state">加载更早的消息…</div>
+            <div v-if="hasMoreMessages" class="chat-more" @click="loadOlderMessages">↑ 加载更早的消息</div>
+            <div v-if="!chatLoading && messages.length === 0" class="chat-state chat-state--empty">
+              <span class="chat-state__mark">✉</span>
+              <span class="chat-state__title">房间里还没有人说话</span>
+              <span class="chat-state__hint">发条消息，约对手开一局</span>
+            </div>
+            <div
+              v-for="msg in messages"
+              :key="msg.id"
+              class="chat-msg"
+              :class="{ 'chat-msg--self': msg.user_id === userStore.userId }"
+            >
+              <div class="chat-msg__meta">
+                <span class="chat-msg__name">{{ msg.is_ai ? 'AI · ' : '' }}{{ msg.nickname }}</span>
+                <span class="chat-msg__time gg-num">{{ formatTime(msg.created_at) }}</span>
+              </div>
+              <div class="chat-msg__content">{{ msg.content }}</div>
+            </div>
+          </div>
+
+          <div class="chat-input">
+            <el-input v-model="chatInput" placeholder="输入消息…" maxlength="500" @keyup.enter="handleSendMessage">
+              <template #append>
+                <el-button :loading="sendLoading" @click="handleSendMessage">发送</el-button>
+              </template>
+            </el-input>
+          </div>
+        </div>
+      </aside>
+    </main>
 
     <!-- 房间设置对话框（仅房主） -->
     <el-dialog v-model="showSettingsDialog" title="房间设置" width="480px" :close-on-click-modal="false">
@@ -276,36 +279,39 @@
 
         <el-form-item label="选择地图">
           <el-radio-group v-model="settingsForm.map_id">
-            <el-radio-button
-              v-for="m in MAP_OPTIONS"
-              :key="m.value"
-              :value="m.value"
-            >
+            <el-radio-button v-for="m in MAP_OPTIONS" :key="m.value" :value="m.value">
               {{ m.label }}
             </el-radio-button>
           </el-radio-group>
         </el-form-item>
 
         <el-form-item label="AI 数量">
-          <el-slider
-            v-model="settingsForm.ai_count"
-            :min="0"
-            :max="settingsMaxAi"
-            :step="1"
-            show-stops
-          />
+          <el-slider v-model="settingsForm.ai_count" :min="0" :max="settingsMaxAi" :step="1" show-stops />
         </el-form-item>
 
         <el-form-item v-if="(settingsForm.ai_count ?? 0) > 0" label="AI 难度">
           <el-radio-group v-model="settingsForm.ai_difficulty">
-            <el-radio-button
-              v-for="opt in AI_DIFFICULTY_OPTIONS"
-              :key="opt.value"
-              :value="opt.value"
-            >
+            <el-radio-button v-for="opt in AI_DIFFICULTY_OPTIONS" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </el-radio-button>
           </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="房间密码">
+          <el-switch v-model="settingsPasswordEnabled" active-text="启用密码" inline-prompt />
+          <span class="settings-hint">
+            {{ roomData?.has_password ? '当前房间已设置密码' : '当前房间无密码' }}
+          </span>
+        </el-form-item>
+
+        <el-form-item v-if="settingsPasswordEnabled" label="新密码">
+          <el-input
+            v-model="settingsPassword"
+            type="password"
+            show-password
+            maxlength="32"
+            placeholder="留空则保持原密码不变"
+          />
         </el-form-item>
       </el-form>
 
@@ -321,7 +327,6 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Loading } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useRoomStore } from '@/stores/room'
 import {
@@ -387,10 +392,38 @@ const canStart = computed(() => {
 
 const startHint = computed(() => {
   if (!roomData.value) return ''
-  if (roomData.value.players.length < 2) return '至少需要2名玩家'
+  if (roomData.value.players.length < 2) return '至少需要 2 名玩家才能开始'
   if (!roomData.value.players.every((p) => p.is_ready || p.is_host || p.is_ai)) return '还有玩家未准备'
   return ''
 })
+
+// 席位数量（至少 2 个，最多 8 个）
+const seatCount = computed(() => Math.max(2, roomData.value?.max_players ?? 4))
+
+const playerAt = (index: number) => roomData.value?.players[index] ?? null
+
+const pad = (value: number) => String(value).padStart(2, '0')
+
+const hostNickname = computed(() => {
+  if (!roomData.value) return '—'
+  const host = roomData.value.players.find((p) => p.user_id === roomData.value!.host_id)
+  return host?.nickname ?? '—'
+})
+
+const roleText = computed(() => {
+  if (roomData.value?.status === 'waiting') {
+    if (isHost.value) return '房主'
+    if (isSpectator.value) return '观战者'
+    return '玩家'
+  }
+  return roomData.value?.status === 'playing' ? '对局中' : '已结束'
+})
+
+const statusText = computed(
+  () =>
+    ({ waiting: '等待中', playing: '对局中', finished: '已结束' })[roomData.value?.status ?? ''] ??
+    '未知状态',
+)
 
 // 地图显示文本
 const mapLabel = computed(() => {
@@ -486,7 +519,7 @@ const scrollToBottom = () => {
   el.scrollTop = el.scrollHeight
 }
 
-// 滚动事件（可选：用户手动上翻时不自动滚到底）
+// 滚动事件（预留：用户手动上翻时不自动滚到底）
 const onChatScroll = () => {
   // 预留：可在此检测滚动位置决定是否自动滚动
 }
@@ -536,6 +569,10 @@ const settingsForm = ref<UpdateRoomData>({
   ai_difficulty: 'easy',
 })
 
+// 房间密码（对齐后端 UpdateRoomData.password / clear_password）
+const settingsPasswordEnabled = ref(false)
+const settingsPassword = ref('')
+
 // 设置面板中 AI 最大数量（房主可自动变为观战者，所以 AI 数量可以等于 max_players）
 const settingsMaxAi = computed(() => {
   // 非房主真人玩家占的位置不能被 AI 替代，但房主可以自动变为观战者
@@ -555,22 +592,34 @@ watch(showSettingsDialog, (val) => {
       ai_count: roomData.value.ai_count,
       ai_difficulty: roomData.value.ai_difficulty,
     }
+    settingsPasswordEnabled.value = !!roomData.value.has_password
+    settingsPassword.value = ''
   }
 })
 
 // 最大人数变化时限制 AI 数量
-watch(() => settingsForm.value.max_players, () => {
-  if ((settingsForm.value.ai_count ?? 0) > settingsMaxAi.value) {
-    settingsForm.value.ai_count = settingsMaxAi.value
-  }
-})
+watch(
+  () => settingsForm.value.max_players,
+  () => {
+    if ((settingsForm.value.ai_count ?? 0) > settingsMaxAi.value) {
+      settingsForm.value.ai_count = settingsMaxAi.value
+    }
+  },
+)
 
 const handleSaveSettings = async () => {
   if (!roomData.value) return
   settingsLoading.value = true
   roomStore.stopPolling()
   try {
-    const data = await updateRoomSettings(roomData.value.id, settingsForm.value)
+    const payload: UpdateRoomData = { ...settingsForm.value }
+    const nextPassword = settingsPassword.value.trim()
+    if (settingsPasswordEnabled.value) {
+      if (nextPassword) payload.password = nextPassword
+    } else if (roomData.value.has_password) {
+      payload.clear_password = true
+    }
+    const data = await updateRoomSettings(roomData.value.id, payload)
     roomData.value = data
     roomStore.setRoom(data)
     showSettingsDialog.value = false
@@ -712,7 +761,7 @@ const handleEnterGame = () => {
 // 游戏结束后获胜者昵称
 const winnerNickname = computed(() => {
   if (!roomStore.gameOverData?.rankings?.length) return '—'
-  const winner = roomStore.gameOverData.rankings.find(r => r.rank === 1)
+  const winner = roomStore.gameOverData.rankings.find((r) => r.rank === 1)
   return winner?.nickname ?? '—'
 })
 
@@ -786,204 +835,587 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/**
+ * 房间页：票据式顶栏 + 主列（席位/观战/操作台/房间信息）+ 聊天列。
+ * 主列两栏网格铺满宽度，聊天列撑满视口高度，消除右侧与下半部留白。
+ */
 .room-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
   width: 100%;
-  height: 100%;
+  background-color: var(--gg-bg);
+  background-image: var(--gg-grid);
+  background-size: 24px 24px, 24px 24px;
 }
 
-.room-body {
-  height: calc(100vh - 80px);
-}
-
-.room-main {
-  padding: 12px 0 0 0;
-}
-
-/* 覆盖 Element Plus .el-button+.el-button 的默认 margin-left: 12px，
-   避免在 flex-col 布局中按钮错位 */
-.flex-col > .el-button + .el-button {
-  margin-left: 0;
-}
-
-/* 玩家列表卡片高度自适应 */
-.player-card {
-  max-height: 280px;
-}
-.player-card :deep(.el-card__body) {
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.player-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.player-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-}
-
-.player-name {
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100px;
-}
-
-/* 聊天区 */
-.chat-card {
-  height: calc(100vh - 100px);
-  display: flex;
-  flex-direction: column;
-}
-.chat-card :deep(.el-card__body) {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-}
-
-.chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.chat-loading,
-.chat-empty {
-  text-align: center;
-  color: #999;
-  padding: 20px 0;
-  font-size: 13px;
-}
-
-.load-more {
-  text-align: center;
-  color: #409eff;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 6px 0;
-}
-.load-more:hover {
-  text-decoration: underline;
-}
-
-.chat-msg {
-  max-width: 80%;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: #f4f4f5;
-  word-break: break-word;
-}
-.chat-msg-self {
-  align-self: flex-end;
-  background: #ecf5ff;
-}
-.chat-msg-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 2px;
-}
-.chat-msg-nickname {
-  font-size: 12px;
-  font-weight: 600;
-  color: #606266;
-}
-.chat-msg-time {
-  font-size: 11px;
-  color: #c0c4cc;
-}
-.chat-msg-content {
-  font-size: 14px;
-  color: #303133;
-  line-height: 1.5;
-}
-
-.chat-input {
-  padding: 10px 12px;
-  border-top: 1px solid #ebeef5;
-}
-
-/* 观战者列表 */
-.spectator-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.spectator-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 2px 0;
-}
-
-.spectator-name {
-  font-size: 13px;
-  color: #909399;
-}
-
-/* 游戏结束回顾 */
-.gameover-card :deep(.el-card__body) {
-  padding: 12px 16px;
-}
-
-.gameover-rankings {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.gameover-rank-row {
+/* ── 顶栏 ── */
+.room-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  background: #f5f7fa;
+  flex-wrap: wrap;
+  padding: 10px 22px;
+  background: var(--gg-grad-night);
+  border-bottom: 3px double #16130f;
+  color: #f2ead9;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
-.gameover-rank-row.rank-row-me {
-  background: #ecf5ff;
-  border: 1px solid #409eff;
+.room-bar__back {
+  color: rgba(242, 234, 217, 0.78);
 }
 
-.rank-pos {
-  font-size: 20px;
-  min-width: 36px;
-  text-align: center;
+.room-bar__back:hover {
+  color: #fdf7ea;
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.rank-name {
-  flex: 1;
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.rank-assets {
+.room-bar__title {
+  font-family: var(--gg-font-display);
+  font-size: 17px;
   font-weight: 700;
-  color: #e6a23c;
-  font-size: 14px;
+  letter-spacing: 0.03em;
+  color: #fdf7ea;
 }
 
-.gameover-summary {
+.room-bar__code {
+  font-family: var(--gg-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  padding: 3px 9px;
+  border: 1px dashed rgba(242, 234, 217, 0.42);
+  color: var(--gg-gold);
+}
+
+.room-bar__status {
+  font-family: var(--gg-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: 1px solid rgba(242, 234, 217, 0.34);
+}
+
+.room-bar__status[data-status='waiting'] {
+  color: #9fd3b1;
+  border-color: rgba(159, 211, 177, 0.5);
+}
+
+.room-bar__status[data-status='playing'] {
+  background: var(--gg-brand);
+  border-color: #6f1d13;
+  color: #fdf3ea;
+}
+
+.room-bar__status[data-status='finished'] {
+  color: #f0b7ab;
+  border-color: rgba(240, 183, 171, 0.5);
+}
+
+.room-bar__spacer {
+  flex: 1 1 auto;
+}
+
+.room-bar__meta {
+  font-family: var(--gg-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: rgba(242, 234, 217, 0.64);
+}
+
+/* ── 主体 ── */
+.room-main {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 14px;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px 22px 20px;
+  box-sizing: border-box;
+  min-height: calc(100vh - 62px);
+  animation: gg-fade-up var(--gg-dur-slow) var(--gg-ease-out) both;
+}
+
+.room-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.room-col--main {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: auto;
+  gap: 14px;
+  align-content: start;
+}
+
+.room-col--side {
+  min-height: 0;
+}
+
+.room-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--gg-surface);
+  border: 1px solid var(--gg-border-strong);
+  box-shadow: var(--gg-shadow-1);
+}
+
+.room-panel--wide {
+  grid-column: 1 / -1;
+}
+
+.room-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--gg-surface-2);
+  border-bottom: 1px dashed var(--gg-border-strong);
+}
+
+.room-panel__meta {
+  font-family: var(--gg-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--gg-ink-3);
+}
+
+.room-panel__body {
+  padding: 13px 14px;
+}
+
+.room-panel__body--ops {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.room-panel__hint {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  color: var(--gg-ink-3);
+}
+
+.room-panel__hint b {
+  color: var(--gg-brand);
+  letter-spacing: 0.14em;
+}
+
+/* ── 席位 ── */
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
+  border-left: 2px solid var(--gg-border-strong);
+  min-width: 0;
+  transition: border-color var(--gg-dur) var(--gg-ease), background-color var(--gg-dur) var(--gg-ease);
+}
+
+.seat--me {
+  border-left-color: var(--gg-brand);
+  background: var(--gg-brand-soft);
+}
+
+.seat--empty {
+  border-style: dashed;
+  background: transparent;
+}
+
+.seat__no {
+  flex: 0 0 auto;
+  font-family: var(--gg-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--gg-ink-4);
+}
+
+.seat__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  font-family: var(--gg-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gg-ink-2);
+  background: var(--gg-surface);
+  border: 1px solid var(--gg-border-strong);
+}
+
+.seat__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.seat__info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.seat__name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.seat__empty {
+  font-size: 12px;
+  color: var(--gg-ink-4);
+}
+
+/* ── 观战 ── */
+.watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.watch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
+}
+
+.watch-row__name {
+  font-size: 12.5px;
+  color: var(--gg-ink-2);
+}
+
+.room-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 20px 12px;
+  font-size: 12px;
+  color: var(--gg-ink-4);
+  border: 1px dashed var(--gg-border-strong);
+}
+
+.room-empty__mark {
+  font-size: 18px;
+  color: var(--gg-gold);
+}
+
+/* ── 操作台 ── */
+.ops-btn {
+  width: 100%;
+}
+
+.ops-note {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--gg-ink-2);
+  background: var(--gg-surface-2);
+  border: 1px dashed var(--gg-border-strong);
+}
+
+.ops-note--ok {
+  color: var(--gg-green);
+  border-color: rgba(63, 102, 78, 0.45);
+  background: var(--gg-green-soft);
+}
+
+.ops-note--danger {
+  color: var(--gg-brand-strong);
+  border-color: rgba(176, 57, 44, 0.45);
+  background: var(--gg-brand-soft);
+}
+
+.ops-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--gg-ink-3);
   text-align: center;
-  padding: 8px 0;
 }
 
-.gameover-winner {
-  font-size: 16px;
+/* ── 房间信息 ── */
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 18px;
+  margin: 0;
+}
+
+.info-grid__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px dotted var(--gg-border);
+}
+
+.info-grid__row dt {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--gg-ink-3);
+  white-space: nowrap;
+}
+
+.info-grid__row dd {
+  margin: 0;
+  font-size: 12.5px;
   font-weight: 600;
-  color: #e6a23c;
+  color: var(--gg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 结果面板 ── */
+.room-panel--result {
+  flex: 0 0 auto;
+}
+
+.result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.result-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
+}
+
+.result-row--me {
+  background: var(--gg-brand-soft);
+  border-color: rgba(176, 57, 44, 0.35);
+}
+
+.result-row__pos {
+  font-family: var(--gg-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--gg-gold-strong);
+}
+
+.result-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-row__assets {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--gg-gold-strong);
+}
+
+/* ── 聊天 ── */
+.room-panel--chat {
+  flex: 1 1 auto;
+  min-height: 380px;
+}
+
+.room-panel--chat .room-panel__body,
+.chat-messages {
+  min-height: 0;
+}
+
+.chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  scrollbar-width: thin;
+}
+
+.chat-state {
+  padding: 14px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--gg-ink-4);
+}
+
+.chat-state--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-height: 150px;
+  border: 1px dashed var(--gg-border-strong);
+  background: var(--gg-bg-deep);
+}
+
+.chat-state__mark {
+  font-size: 20px;
+  color: var(--gg-gold);
+}
+
+.chat-state__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gg-ink-2);
+}
+
+.chat-state__hint {
+  font-size: 11.5px;
+  color: var(--gg-ink-4);
+}
+
+.chat-more {
+  padding: 4px;
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--gg-brand);
+  border: 1px dashed var(--gg-border-strong);
+  cursor: pointer;
+}
+
+.chat-more:hover {
+  background: var(--gg-brand-soft);
+}
+
+.chat-msg {
+  max-width: 88%;
+  padding: 7px 10px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
+  border-left: 2px solid var(--gg-border-strong);
+  animation: gg-fade-up var(--gg-dur) var(--gg-ease-out) both;
+}
+
+.chat-msg--self {
+  margin-left: auto;
+  background: var(--gg-brand-soft);
+  border-left-color: var(--gg-brand);
+}
+
+.chat-msg__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.chat-msg__name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gg-ink-2);
+}
+
+.chat-msg--self .chat-msg__name {
+  color: var(--gg-brand);
+}
+
+.chat-msg__time {
+  font-size: 10px;
+  color: var(--gg-ink-4);
+}
+
+.chat-msg__content {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--gg-ink);
+  word-break: break-word;
+}
+
+.chat-input {
+  padding: 11px 14px;
+  border-top: 1px dashed var(--gg-border-strong);
+  background: var(--gg-surface-2);
+}
+
+.settings-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--gg-ink-3);
+  line-height: 1.6;
+}
+
+@media (max-width: 1080px) {
+  .room-main {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .room-col--main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .room-panel--wide {
+    grid-column: auto;
+  }
+
+  .room-panel--chat {
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 640px) {
+  .room-bar {
+    padding: 10px 14px;
+    gap: 8px;
+  }
+
+  .room-main {
+    padding: 14px 12px 18px;
+  }
+
+  .seat-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .info-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .room-bar__meta {
+    width: 100%;
+  }
 }
 </style>

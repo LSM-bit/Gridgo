@@ -1,0 +1,6 @@
+export { default as PageHeader } from './PageHeader.vue'
+export { default as EmptyState } from './EmptyState.vue'
+export { default as StatCard } from './StatCard.vue'
+export { default as LogPanel } from './LogPanel.vue'
+export { default as ChatPanel } from './ChatPanel.vue'
+export { default as GameOverDialog } from './GameOverDialog.vue'

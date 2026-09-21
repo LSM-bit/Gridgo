@@ -7,10 +7,13 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import app_logger
 from app.core.redis import get_redis
 from app.game.engine import GameEngine, get_engine, remove_engine
+from app.game.events import manager as ws_manager
 from app.game.schemas import GameState
 from app.schemas.room import RoomInfo
+from app.services.chat import ChatService
 from app.services.map import MapService
 from app.services.room import RoomService
 
@@ -135,6 +138,68 @@ class GameService:
         """处理使用免罪卡请求"""
         engine = get_engine(room_id)
         await engine.jail_use_card(player_id)
+
+    # ─── 交易系统（docs/PROJECT.md 8.3 / GAME_FLOW.md 8.3） ───
+
+    @staticmethod
+    async def handle_trade_offer(room_id: str, player_id: int, payload: dict) -> None:
+        """处理发起交易请求（game.trade_offer）
+
+        payload: {target_id, offer: {cash, properties}, request: {cash, properties}}
+        """
+        engine = get_engine(room_id)
+        await engine.offer_trade(player_id, payload)
+
+    @staticmethod
+    async def handle_trade_accept(room_id: str, player_id: int, trade_id: str) -> None:
+        """处理接受交易请求（game.trade_accept）"""
+        engine = get_engine(room_id)
+        await engine.accept_trade(player_id, trade_id)
+
+    @staticmethod
+    async def handle_trade_reject(room_id: str, player_id: int, trade_id: str) -> None:
+        """处理拒绝/撤回交易请求（game.trade_reject）"""
+        engine = get_engine(room_id)
+        await engine.reject_trade(player_id, trade_id)
+
+    # ─── 断线重连（docs/GAME_FLOW.md 9） ───
+
+    @staticmethod
+    async def handle_player_connected(room_id: str, player_id: int) -> str | None:
+        """玩家 WS 连接/重连：复位连接标记并广播 system.player_reconnected"""
+        engine = get_engine(room_id)
+        try:
+            return await engine.mark_connected(player_id)
+        except Exception as e:
+            app_logger.warning("重连处理失败: room=%s user=%s error=%s", room_id, player_id, e)
+            return None
+
+    @staticmethod
+    async def handle_player_disconnected(room_id: str, player_id: int) -> None:
+        """玩家 WS 断开：记录离线时刻（用于判定恢复档位）"""
+        engine = get_engine(room_id)
+        try:
+            await engine.mark_disconnected(player_id)
+        except Exception as e:
+            app_logger.warning("断线标记失败: room=%s user=%s error=%s", room_id, player_id, e)
+
+    # ─── 聊天（docs/PROJECT.md 8.4：chat.send） ───
+
+    @staticmethod
+    async def handle_chat_send(room_id: str, user_id: int, content: str) -> dict | None:
+        """处理聊天消息（chat.send → 广播 chat.message）"""
+        if not content or not str(content).strip():
+            return None
+        room = await RoomService._get_room(room_id)
+        if not room:
+            return None
+        sender = next((p for p in room.players if p.user_id == user_id), None)
+        nickname = sender.nickname if sender else f"玩家{user_id}"
+        is_ai = bool(sender.is_ai) if sender else False
+        msg = await ChatService.send_message(room, user_id, nickname, is_ai, str(content))
+        payload = msg.model_dump()
+        await ws_manager.broadcast(room_id, "chat.message", payload)
+        return payload
 
     @staticmethod
     async def cleanup_game(room_id: str) -> None:

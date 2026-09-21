@@ -23,6 +23,32 @@ function truncate(str: string, max = 200): string {
   return str.length > max ? str.slice(0, max) + '…' : str
 }
 
+/** 日志脱敏：递归隐藏密码 / Token 等敏感字段，避免开发调试日志泄露凭据 */
+const SENSITIVE_KEYS = [
+  'password',
+  'old_password',
+  'new_password',
+  'token',
+  'access_token',
+  'refresh_token',
+  'authorization',
+]
+
+function redact(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redact)
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, val]) => [
+        key,
+        SENSITIVE_KEYS.includes(key.toLowerCase()) ? '***' : redact(val),
+      ]),
+    )
+  }
+  return value
+}
+
 // ─── Token 刷新锁，防止并发请求同时触发多次刷新 ───
 
 let isRefreshing = false
@@ -55,17 +81,20 @@ request.interceptors.request.use((config) => {
   // 记录请求开始时间，用于计算耗时
   config._startTime = Date.now()
 
-  const method = (config.method ?? 'GET').toUpperCase()
-  const url = `${config.baseURL ?? ''}${config.url ?? ''}`
-  const body = config.data ? truncate(JSON.stringify(config.data)) : '-'
+  // 仅开发环境输出请求日志（生产构建不打印请求内容，避免敏感信息泄露）
+  if (import.meta.env.DEV) {
+    const method = (config.method ?? 'GET').toUpperCase()
+    const url = `${config.baseURL ?? ''}${config.url ?? ''}`
+    const body = config.data ? truncate(JSON.stringify(redact(config.data))) : '-'
 
-  console.log(
-    `%c→ %c${method} %c${url} %c${body}`,
-    'color:#6cf;font-weight:bold',   // 箭头
-    'color:#fd6;font-weight:bold',   // 方法
-    'color:#aaa',                    // URL
-    'color:#666',                    // 请求体
-  )
+    console.log(
+      `%c→ %c${method} %c${url} %c${body}`,
+      'color:#6cf;font-weight:bold',   // 箭头
+      'color:#fd6;font-weight:bold',   // 方法
+      'color:#aaa',                    // URL
+      'color:#666',                    // 请求体
+    )
+  }
 
   return config
 })
@@ -74,41 +103,48 @@ request.interceptors.request.use((config) => {
 
 request.interceptors.response.use(
   (response) => {
-    const method = (response.config.method ?? 'GET').toUpperCase()
-    const url = `${response.config.baseURL ?? ''}${response.config.url ?? ''}`
-    const status = response.status
-    const duration = Date.now() - (response.config._startTime ?? Date.now())
-    const body = truncate(JSON.stringify(response.data))
+    // 仅开发环境输出响应日志（生产构建不打印响应内容）
+    if (import.meta.env.DEV) {
+      const method = (response.config.method ?? 'GET').toUpperCase()
+      const url = `${response.config.baseURL ?? ''}${response.config.url ?? ''}`
+      const status = response.status
+      const duration = Date.now() - (response.config._startTime ?? Date.now())
+      const body = truncate(JSON.stringify(redact(response.data)))
 
-    console.log(
-      `%c← %c${status} %c${method} ${url} %c${duration}ms %c${body}`,
-      'color:#6cf;font-weight:bold',   // 箭头
-      'color:#4f4;font-weight:bold',   // 状态码
-      'color:#aaa',                    // 方法 + URL
-      'color:#888',                    // 耗时
-      'color:#666',                    // 响应体
-    )
+      console.log(
+        `%c← %c${status} %c${method} ${url} %c${duration}ms %c${body}`,
+        'color:#6cf;font-weight:bold',   // 箭头
+        'color:#4f4;font-weight:bold',   // 状态码
+        'color:#aaa',                    // 方法 + URL
+        'color:#888',                    // 耗时
+        'color:#666',                    // 响应体
+      )
+    }
 
     return response.data
   },
   async (error) => {
     const config = error.config ?? {}
-    const method = (config.method ?? 'GET').toUpperCase()
-    const url = `${config.baseURL ?? ''}${config.url ?? ''}`
-    const status = error.response?.status ?? 'N/A'
-    const duration = Date.now() - (config._startTime ?? Date.now())
-    const detail = error.response?.data
-      ? truncate(JSON.stringify(error.response.data))
-      : error.message ?? 'Unknown error'
 
-    console.log(
-      `%c← %c${status} %c${method} ${url} %c${duration}ms %c${detail}`,
-      'color:#6cf;font-weight:bold',   // 箭头
-      'color:#f44;font-weight:bold',   // 状态码（红色=错误）
-      'color:#aaa',                    // 方法 + URL
-      'color:#888',                    // 耗时
-      'color:#f66',                    // 错误详情（红色）
-    )
+    // 仅开发环境输出错误响应日志（生产构建不打印响应内容）
+    if (import.meta.env.DEV) {
+      const method = (config.method ?? 'GET').toUpperCase()
+      const url = `${config.baseURL ?? ''}${config.url ?? ''}`
+      const status = error.response?.status ?? 'N/A'
+      const duration = Date.now() - (config._startTime ?? Date.now())
+      const detail = error.response?.data
+        ? truncate(JSON.stringify(redact(error.response.data)))
+        : error.message ?? 'Unknown error'
+
+      console.log(
+        `%c← %c${status} %c${method} ${url} %c${duration}ms %c${detail}`,
+        'color:#6cf;font-weight:bold',   // 箭头
+        'color:#f44;font-weight:bold',   // 状态码（红色=错误）
+        'color:#aaa',                    // 方法 + URL
+        'color:#888',                    // 耗时
+        'color:#f66',                    // 错误详情（红色）
+      )
+    }
 
     if (error.response?.status === 401 && !config._isRefresh) {
       const userStore = useUserStore()

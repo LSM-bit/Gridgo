@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
+import { getMyRoom } from '@/api/room'
+import type { RoomInfo } from '@/api/room'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -46,6 +49,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '排行榜' },
   },
   {
+    path: '/friends',
+    name: 'Friends',
+    component: () => import('@/pages/Friends.vue'),
+    meta: { title: '好友', requiresAuth: true },
+  },
+  {
     path: '/replay/:id',
     name: 'Replay',
     component: () => import('@/pages/Replay.vue'),
@@ -59,7 +68,7 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   document.title = (to.meta.title as string) || 'GridGo - 大富翁'
 
   const userStore = useUserStore()
@@ -75,6 +84,33 @@ router.beforeEach((to, _from, next) => {
   if (to.meta.guestOnly && loggedIn) {
     next({ name: 'Home' })
     return
+  }
+
+  // 房间页 → 校验当前用户确实已加入该房间（防止未加入直接访问 /room/:code）
+  if (to.name === 'Room' && loggedIn) {
+    const code = String(to.params.code ?? '')
+    let myRoom: RoomInfo | null = null
+    let checked = false
+    try {
+      myRoom = await getMyRoom()
+      checked = true
+    } catch (err) {
+      // 接口异常（网络/服务未就绪）不拦截，避免误伤正常访问
+      console.warn('[Router] 获取当前活跃房间失败，跳过房间守卫校验', err)
+    }
+
+    if (checked) {
+      if (!myRoom) {
+        ElMessage.warning('你尚未加入任何房间，请先在大厅创建或加入房间')
+        next({ name: 'Home' })
+        return
+      }
+      // 已加入其他房间 → 直接带回自己所在的房间
+      if (myRoom.code !== code) {
+        next({ name: 'Room', params: { code: myRoom.code }, replace: true })
+        return
+      }
+    }
   }
 
   next()

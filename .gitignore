@@ -61,3 +61,6 @@ coverage/
 # === 临时文件 ===
 tmp/
 temp/
+
+# === TypeScript 编译副产物（tsc 未设 noEmit 会在 src 下产出同名 .js） ===
+gridgo-web/src/**/*.js

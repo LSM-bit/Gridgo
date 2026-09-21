@@ -1,150 +1,150 @@
 <template>
-  <div class="profile-page">
-    <el-container style="height: 100vh">
-      <!-- 顶栏 -->
-      <el-header>
-        <div class="flex-between w-full h-full">
-          <div class="flex items-center gap-3">
-            <el-button text @click="$router.push('/')">
-              <el-icon><ArrowLeft /></el-icon>
-              返回
-            </el-button>
-            <span class="text-lg font-bold">👤 个人中心</span>
+  <DefaultLayout title="个人中心">
+    <template #actions>
+      <el-button size="small" :loading="loading" @click="refreshAll">刷新</el-button>
+      <el-button size="small" @click="openEditDialog">修改资料</el-button>
+      <el-button size="small" @click="openPasswordDialog">修改密码</el-button>
+    </template>
+
+    <div class="profile-page">
+      <PageHeader title="个人中心" subtitle="账号资料 · 战绩统计 · 对局记录" icon="◈" />
+
+      <div class="profile-grid">
+        <!-- 身份卡 -->
+        <section class="profile-panel">
+          <header class="profile-panel__head">
+            <span class="gg-kicker">PLAYER · 身份卡</span>
+            <span class="profile-panel__meta">{{ profile?.status === 0 ? '正常' : '已禁用' }}</span>
+          </header>
+          <div class="profile-panel__body">
+            <div class="id-card">
+              <span class="id-card__avatar">
+                <img v-if="profile?.avatar" :src="profile.avatar" alt="" />
+                <span v-else>{{ (profile?.nickname || '?').charAt(0) }}</span>
+              </span>
+              <span class="id-card__text">
+                <b class="id-card__name">{{ profile?.nickname || '—' }}</b>
+                <span class="id-card__username">@{{ profile?.username || '—' }}</span>
+              </span>
+            </div>
+
+            <dl class="info-grid">
+              <div class="info-grid__row">
+                <dt>用户 ID</dt>
+                <dd class="gg-num">{{ userStore.userId ?? '—' }}</dd>
+              </div>
+              <div class="info-grid__row">
+                <dt>注册时间</dt>
+                <dd>{{ formatDate(profile?.created_at) }}</dd>
+              </div>
+              <div class="info-grid__row">
+                <dt>邮箱</dt>
+                <dd>{{ profile?.email || '未设置' }}</dd>
+              </div>
+            </dl>
+
+            <div class="id-card__ops">
+              <el-button class="ops-btn" @click="openEditDialog">修改资料</el-button>
+              <el-button class="ops-btn" @click="openPasswordDialog">修改密码</el-button>
+            </div>
           </div>
-        </div>
-      </el-header>
+        </section>
 
-      <el-main v-loading="loading">
-        <el-row :gutter="20" class="profile-body">
-          <!-- 左侧：个人信息卡片 -->
-          <el-col :span="8">
-            <el-card class="profile-card">
-              <div class="profile-avatar-section">
-                <el-avatar :size="80" :src="profile?.avatar || undefined">
-                  {{ profile?.nickname?.charAt(0) || '?' }}
-                </el-avatar>
-                <h2 class="profile-nickname">{{ profile?.nickname || '—' }}</h2>
-                <p class="profile-username">@{{ profile?.username || '—' }}</p>
-                <el-tag v-if="profile?.status === 0" type="success" size="small">正常</el-tag>
-                <el-tag v-else type="danger" size="small">已禁用</el-tag>
+        <!-- 战绩统计 -->
+        <section class="profile-panel">
+          <header class="profile-panel__head">
+            <span class="gg-kicker">STATS · 战绩统计</span>
+            <span class="profile-panel__meta gg-num">{{ stats?.total_games ?? 0 }} 局</span>
+          </header>
+          <div class="profile-panel__body">
+            <div v-if="stats" class="stat-grid">
+              <div class="stat">
+                <span class="stat__num gg-num">{{ stats.total_games }}</span>
+                <span class="stat__label">总局数</span>
               </div>
-
-              <el-divider />
-
-              <!-- 统计数据 -->
-              <div v-if="stats" class="stats-grid">
-                <div class="stat-item">
-                  <span class="stat-value">{{ stats.total_games }}</span>
-                  <span class="stat-label">总局数</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-value stat-win">{{ stats.wins }}</span>
-                  <span class="stat-label">胜场</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-value">{{ winRate }}%</span>
-                  <span class="stat-label">胜率</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-value">{{ stats.avg_rank }}</span>
-                  <span class="stat-label">平均排名</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-value stat-money">¥{{ formatNumber(stats.total_assets) }}</span>
-                  <span class="stat-label">总资产</span>
-                </div>
-                <div class="stat-item">
-                  <span class="stat-value" :class="{ 'stat-bankrupt': stats.bankruptcies > 0 }">{{ stats.bankruptcies }}</span>
-                  <span class="stat-label">破产</span>
-                </div>
+              <div class="stat">
+                <span class="stat__num gg-num">{{ stats.wins }}</span>
+                <span class="stat__label">胜场</span>
               </div>
-              <div v-else class="text-center text-gray-400 text-sm">暂无统计数据</div>
-
-              <el-divider />
-
-              <!-- 注册时间 -->
-              <div class="profile-meta">
-                <p>📅 注册时间：{{ formatDate(profile?.created_at) }}</p>
-                <p>📧 邮箱：{{ profile?.email || '未设置' }}</p>
+              <div class="stat">
+                <span class="stat__num gg-num">{{ winRate }}%</span>
+                <span class="stat__label">胜率</span>
               </div>
-
-              <el-divider />
-
-              <!-- 操作按钮 -->
-              <div class="flex-col gap-2">
-                <el-button size="large" class="w-full" @click="showEditDialog = true">
-                  ✏️ 修改资料
-                </el-button>
-                <el-button size="large" class="w-full" @click="showPasswordDialog = true">
-                  🔒 修改密码
-                </el-button>
+              <div class="stat">
+                <span class="stat__num gg-num">{{ stats.avg_rank }}</span>
+                <span class="stat__label">平均排名</span>
               </div>
-            </el-card>
-          </el-col>
-
-          <!-- 右侧：对局记录 -->
-          <el-col :span="16">
-            <el-card class="records-card">
-              <template #header>
-                <div class="flex-between">
-                  <span>🏆 对局记录</span>
-                  <el-tag v-if="stats" type="info" size="small">共 {{ stats.total_games }} 局</el-tag>
-                </div>
-              </template>
-
-              <div v-if="records.length === 0 && !recordsLoading" class="records-empty">
-                <p>🎮 还没有对局记录</p>
-                <p class="text-gray-400 text-sm">快去开始一局游戏吧！</p>
+              <div class="stat">
+                <span class="stat__num gg-num">¥{{ formatNumber(stats.total_assets) }}</span>
+                <span class="stat__label">总资产</span>
               </div>
+              <div class="stat">
+                <span class="stat__num gg-num">{{ stats.bankruptcies }}</span>
+                <span class="stat__label">破产次数</span>
+              </div>
+            </div>
+            <div v-else class="panel-empty">暂无统计数据，完成一局对局后生成</div>
+          </div>
+        </section>
 
-              <div v-else class="records-list">
-                <div
-                  v-for="record in records"
-                  :key="record.id"
-                  class="record-item"
-                  :class="{ 'record-win': record.my_rank === 1, 'record-bankrupt': record.my_is_bankrupt }"
-                  @click="handleViewDetail(record)"
-                >
-                  <div class="record-left">
-                    <div class="record-rank">
-                      <span v-if="record.my_rank === 1" class="rank-badge rank-1">🥇</span>
-                      <span v-else-if="record.my_rank === 2" class="rank-badge rank-2">🥈</span>
-                      <span v-else-if="record.my_rank === 3" class="rank-badge rank-3">🥉</span>
-                      <span v-else class="rank-badge rank-other">#{{ record.my_rank }}</span>
-                    </div>
-                    <div class="record-info">
-                      <div class="record-title">
-                        <span>{{ mapLabel(record.map_id) }}</span>
-                        <el-tag size="small" :type="endReasonType(record.end_reason)">{{ endReasonLabel(record.end_reason) }}</el-tag>
-                      </div>
-                      <div class="record-meta">
-                        <span>{{ record.player_count }}人</span>
-                        <span>·</span>
-                        <span>{{ record.total_turns }}回合</span>
-                        <span>·</span>
-                        <span>🏆 {{ record.winner_nickname || '—' }}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="record-right">
-                    <div class="record-assets">¥{{ formatNumber(record.my_total_assets ?? 0) }}</div>
-                    <div class="record-date">{{ formatDate(record.created_at) }}</div>
+        <!-- 对局记录 -->
+        <section class="profile-panel profile-panel--wide">
+          <header class="profile-panel__head">
+            <span class="gg-kicker">RECORDS · 对局记录</span>
+            <span class="profile-panel__meta gg-num">
+              {{ records.length }}{{ hasMoreRecords ? '+' : '' }} 条
+            </span>
+          </header>
+
+          <div class="profile-panel__body" v-loading="recordsLoading">
+            <EmptyState
+              v-if="records.length === 0 && !recordsLoading"
+              description="还没有对局记录，去大厅开一局吧"
+            >
+              <el-button size="small" type="primary" @click="router.push('/')">前往大厅</el-button>
+            </EmptyState>
+
+            <div v-else class="record-list">
+              <div
+                v-for="record in records"
+                :key="record.id"
+                class="record-row"
+                :class="{
+                  'record-row--win': record.my_rank === 1,
+                  'record-row--bankrupt': record.my_is_bankrupt,
+                }"
+                @click="handleViewDetail(record)"
+              >
+                <span class="record-row__rank gg-num">{{ pad(record.my_rank) }}</span>
+                <span class="record-row__info">
+                  <span class="record-row__title">
+                    <b>{{ mapLabel(record.map_id) }}</b>
+                    <el-tag size="small" :type="endReasonType(record.end_reason)">
+                      {{ endReasonLabel(record.end_reason) }}
+                    </el-tag>
                     <el-tag v-if="record.my_is_bankrupt" type="danger" size="small">破产</el-tag>
-                  </div>
-                </div>
-
-                <!-- 加载更多 -->
-                <div v-if="hasMoreRecords" class="load-more-records">
-                  <el-button text :loading="recordsLoading" @click="loadMoreRecords">加载更多</el-button>
-                </div>
+                  </span>
+                  <span class="record-row__meta">
+                    {{ record.player_count }} 人 · {{ record.total_turns }} 回合 · 冠军
+                    {{ record.winner_nickname || '—' }}
+                  </span>
+                </span>
+                <span class="record-row__right">
+                  <span class="record-row__assets gg-num">¥{{ formatNumber(record.my_total_assets ?? 0) }}</span>
+                  <span class="record-row__date gg-num">{{ formatDate(record.created_at) }}</span>
+                </span>
               </div>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-main>
-    </el-container>
 
-    <!-- 修改资料对话框 -->
+              <div v-if="hasMoreRecords" class="record-more">
+                <el-button text :loading="recordsLoading" @click="loadMoreRecords">加载更多</el-button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 修改资料 -->
     <el-dialog v-model="showEditDialog" title="修改资料" width="480px" :close-on-click-modal="false">
       <el-form :model="editForm" label-width="80px" label-position="left">
         <el-form-item label="昵称">
@@ -163,7 +163,7 @@
       </template>
     </el-dialog>
 
-    <!-- 修改密码对话框 -->
+    <!-- 修改密码 -->
     <el-dialog v-model="showPasswordDialog" title="修改密码" width="480px" :close-on-click-modal="false">
       <el-form :model="passwordForm" label-width="80px" label-position="left">
         <el-form-item label="旧密码">
@@ -182,11 +182,9 @@
       </template>
     </el-dialog>
 
-    <!-- 对局详情对话框 -->
+    <!-- 对局详情 -->
     <el-dialog v-model="showDetailDialog" title="对局详情" width="560px">
-      <div v-if="detailLoading" class="text-center py-8">
-        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-      </div>
+      <div v-if="detailLoading" class="detail-loading">加载中…</div>
       <div v-else-if="recordDetail">
         <el-descriptions :column="2" border>
           <el-descriptions-item label="地图">{{ mapLabel(recordDetail.map_id) }}</el-descriptions-item>
@@ -196,7 +194,7 @@
           <el-descriptions-item label="日期" :span="2">{{ formatDate(recordDetail.created_at) }}</el-descriptions-item>
         </el-descriptions>
 
-        <h4 class="mt-4 mb-2">玩家排名</h4>
+        <h4 class="detail-title">玩家排名</h4>
         <div class="detail-players">
           <div
             v-for="p in recordDetail.players"
@@ -204,34 +202,30 @@
             class="detail-player-row"
             :class="{ 'detail-player-me': p.user_id === userStore.userId }"
           >
-            <span class="detail-rank">
-              {{ ['🥇', '🥈', '🥉'][p.rank - 1] || `#${p.rank}` }}
-            </span>
+            <span class="detail-rank gg-num">{{ pad(p.rank) }}</span>
             <span class="detail-name">
-              {{ p.is_ai ? '🤖 ' : '' }}{{ p.nickname }}
+              {{ p.is_ai ? 'AI · ' : '' }}{{ p.nickname }}
               <el-tag v-if="p.user_id === userStore.userId" type="primary" size="small">我</el-tag>
             </span>
-            <span class="detail-assets">¥{{ formatNumber(p.total_assets) }}</span>
+            <span class="detail-assets gg-num">¥{{ formatNumber(p.total_assets) }}</span>
             <el-tag v-if="p.is_bankrupt" type="danger" size="small">破产</el-tag>
           </div>
         </div>
 
-        <!-- 查看回放按钮 -->
-        <div class="mt-4 text-center">
-          <el-button type="primary" @click="goToReplay(recordDetail!.id)">
-            🎬 查看回放
-          </el-button>
+        <div class="detail-foot">
+          <el-button type="primary" @click="goToReplay(recordDetail!.id)">查看回放</el-button>
         </div>
       </div>
     </el-dialog>
-  </div>
+  </DefaultLayout>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Loading } from '@element-plus/icons-vue'
+import DefaultLayout from '@/layouts/DefaultLayout.vue'
+import { PageHeader, EmptyState } from '@/components/common'
 import { useUserStore } from '@/stores/user'
 import {
   getMyProfile,
@@ -293,6 +287,8 @@ const winRate = computed(() => {
 })
 
 // ─── 辅助方法 ───
+
+const pad = (value: number) => String(value).padStart(2, '0')
 
 const mapLabel = (mapId: string) => {
   const found = MAP_OPTIONS.find((m) => m.value === mapId)
@@ -369,6 +365,28 @@ const fetchRecords = async (append = false) => {
 
 const loadMoreRecords = () => {
   fetchRecords(true)
+}
+
+const refreshAll = async () => {
+  loading.value = true
+  await Promise.all([fetchProfile(), fetchStats(), fetchRecords()])
+  loading.value = false
+}
+
+// ─── 弹窗入口 ───
+
+const openEditDialog = () => {
+  editForm.value = {
+    nickname: profile.value?.nickname ?? '',
+    avatar: profile.value?.avatar ?? '',
+    email: profile.value?.email ?? '',
+  }
+  showEditDialog.value = true
+}
+
+const openPasswordDialog = () => {
+  passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
+  showPasswordDialog.value = true
 }
 
 // ─── 修改资料 ───
@@ -466,11 +484,7 @@ const goToReplay = (gameId: number) => {
 // ─── 生命周期 ───
 
 onMounted(async () => {
-  loading.value = true
-  await Promise.all([fetchProfile(), fetchStats(), fetchRecords()])
-  loading.value = false
-
-  // 打开修改资料弹窗时预填数据
+  await refreshAll()
   if (profile.value) {
     editForm.value = {
       nickname: profile.value.nickname,
@@ -483,219 +497,312 @@ onMounted(async () => {
 
 <style scoped>
 .profile-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   width: 100%;
-  height: 100%;
-  background: #f5f7fa;
+  max-width: 1240px;
+  min-height: calc(100vh - var(--gg-shell-bar));
+  margin: 0 auto;
+  padding: var(--gg-page-pad) var(--gg-page-pad) 16px;
+  box-sizing: border-box;
+  animation: gg-fade-up var(--gg-dur-slow) var(--gg-ease-out) both;
 }
 
-.profile-body {
-  height: calc(100vh - 80px);
-}
-
-/* 覆盖 Element Plus .el-button+.el-button 的默认 margin-left: 12px，
-   避免在 flex-col 布局中按钮错位 */
-.flex-col > .el-button + .el-button {
-  margin-left: 0;
-}
-
-/* 个人信息卡片 */
-.profile-card {
-  text-align: center;
-}
-
-.profile-avatar-section {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 0;
-}
-
-.profile-nickname {
-  font-size: 22px;
-  font-weight: 700;
-  margin: 4px 0 0;
-  color: #303133;
-}
-
-.profile-username {
-  font-size: 14px;
-  color: #909399;
-  margin: 0;
-}
-
-/* 统计数据 */
-.stats-grid {
+.profile-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.stat-item {
+.profile-panel {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 4px;
-  border-radius: 8px;
-  background: #f5f7fa;
+  min-width: 0;
+  background: var(--gg-surface);
+  border: 1px solid var(--gg-border-strong);
+  box-shadow: var(--gg-shadow-1);
 }
 
-.stat-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: #303133;
+.profile-panel--wide {
+  grid-column: 1 / -1;
 }
 
-.stat-win {
-  color: #67c23a;
-}
-
-.stat-money {
-  font-size: 14px;
-  color: #e6a23c;
-}
-
-.stat-bankrupt {
-  color: #f56c6c;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: #909399;
-}
-
-/* 元信息 */
-.profile-meta {
-  text-align: left;
-  font-size: 13px;
-  color: #606266;
-}
-
-.profile-meta p {
-  margin: 4px 0;
-}
-
-/* 对局记录 */
-.records-card {
-  height: 100%;
-}
-
-.records-card :deep(.el-card__body) {
-  max-height: calc(100vh - 160px);
-  overflow-y: auto;
-}
-
-.records-empty {
-  text-align: center;
-  padding: 60px 0;
-  color: #909399;
-  font-size: 16px;
-}
-
-.records-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.record-item {
+.profile-panel__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-radius: 10px;
-  background: #f9f9f9;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: 1px solid transparent;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--gg-surface-2);
+  border-bottom: 1px dashed var(--gg-border-strong);
 }
 
-.record-item:hover {
-  background: #ecf5ff;
-  border-color: #409eff;
+.profile-panel__meta {
+  font-family: var(--gg-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--gg-ink-3);
 }
 
-.record-item.record-win {
-  background: linear-gradient(135deg, #f0f9eb, #e1f3d8);
-  border-left: 4px solid #67c23a;
+.profile-panel__body {
+  padding: 14px;
 }
 
-.record-item.record-bankrupt {
-  background: linear-gradient(135deg, #fef0f0, #fde2e2);
-  border-left: 4px solid #f56c6c;
-}
-
-.record-left {
+/* ── 身份卡 ── */
+.id-card {
   display: flex;
   align-items: center;
   gap: 14px;
+  padding: 14px;
+  background: var(--gg-grad-night);
+  color: #f2ead9;
+  border: 1px solid #16130f;
 }
 
-.record-rank {
-  min-width: 36px;
-  text-align: center;
-}
-
-.rank-badge {
-  font-size: 20px;
+.id-card__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: var(--gg-surface);
+  border: 1px solid var(--gg-border-strong);
+  color: var(--gg-brand);
+  font-family: var(--gg-font-display);
+  font-size: 22px;
   font-weight: 700;
 }
 
-.rank-badge.rank-other {
-  font-size: 14px;
-  color: #909399;
+.id-card__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
-.record-info {
+.id-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.id-card__name {
+  font-family: var(--gg-font-display);
+  font-size: 18px;
+  color: #fdf7ea;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.id-card__username {
+  font-family: var(--gg-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(242, 234, 217, 0.58);
+}
+
+.info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 14px 0 0;
+}
+
+.info-grid__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--gg-border-strong);
+}
+
+.info-grid__row dt {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--gg-ink-3);
+  white-space: nowrap;
+}
+
+.info-grid__row dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.id-card__ops {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ops-btn {
+  flex: 1 1 0;
+  margin-left: 0;
+}
+
+/* ── 统计 ── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stat {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding: 12px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
 }
 
-.record-title {
+.stat__num {
+  font-family: var(--gg-font-display);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--gg-ink);
+}
+
+.stat__label {
+  font-family: var(--gg-font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gg-ink-3);
+}
+
+.panel-empty {
+  padding: 26px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--gg-ink-4);
+  border: 1px dashed var(--gg-border-strong);
+}
+
+/* ── 记录 ── */
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.record-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
+  border-left: 2px solid var(--gg-border-strong);
+  cursor: pointer;
+  transition: transform var(--gg-dur) var(--gg-ease), box-shadow var(--gg-dur) var(--gg-ease),
+    border-color var(--gg-dur) var(--gg-ease), background-color var(--gg-dur) var(--gg-ease);
+  animation: gg-fade-up var(--gg-dur) var(--gg-ease-out) both;
+}
+
+.record-row:hover {
+  transform: translateX(2px);
+  background: var(--gg-surface);
+  border-left-color: var(--gg-brand);
+  box-shadow: var(--gg-shadow-1);
+}
+
+.record-row--win {
+  border-left-color: var(--gg-gold-strong);
+}
+
+.record-row--bankrupt {
+  opacity: 0.78;
+}
+
+.record-row__rank {
+  font-family: var(--gg-font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--gg-ink-2);
+  text-align: center;
+}
+
+.record-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.record-row__title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 14px;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 13.5px;
+  color: var(--gg-ink);
 }
 
-.record-meta {
-  font-size: 12px;
-  color: #909399;
-  display: flex;
-  gap: 4px;
+.record-row__meta {
+  font-size: 11.5px;
+  color: var(--gg-ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.record-right {
+.record-row__right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
+  gap: 3px;
+  flex: 0 0 auto;
 }
 
-.record-assets {
+.record-row__assets {
+  font-size: 13px;
   font-weight: 700;
-  color: #e6a23c;
-  font-size: 14px;
+  color: var(--gg-gold-strong);
 }
 
-.record-date {
-  font-size: 12px;
-  color: #c0c4cc;
+.record-row__date {
+  font-size: 10.5px;
+  color: var(--gg-ink-4);
 }
 
-.load-more-records {
+.record-more {
+  padding-top: 4px;
   text-align: center;
-  padding: 12px 0;
 }
 
-/* 对局详情 */
+/* ── 详情弹窗 ── */
+.detail-loading {
+  padding: 26px 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--gg-ink-3);
+}
+
+.detail-title {
+  margin: 18px 0 8px;
+  font-size: 13.5px;
+  color: var(--gg-ink);
+}
+
 .detail-players {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .detail-player-row {
@@ -703,30 +810,78 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: #f5f7fa;
+  background: var(--gg-surface-2);
+  border: 1px solid var(--gg-border);
 }
 
-.detail-player-row.detail-player-me {
-  background: #ecf5ff;
-  border: 1px solid #409eff;
+.detail-player-me {
+  background: var(--gg-brand-soft);
+  border-color: rgba(176, 57, 44, 0.35);
 }
 
 .detail-rank {
-  font-size: 18px;
-  min-width: 28px;
-  text-align: center;
+  flex: 0 0 30px;
+  font-family: var(--gg-font-mono);
+  font-weight: 700;
+  color: var(--gg-ink-2);
 }
 
 .detail-name {
-  flex: 1;
-  font-size: 14px;
-  font-weight: 500;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gg-ink);
 }
 
 .detail-assets {
+  font-size: 13px;
   font-weight: 600;
-  color: #e6a23c;
-  font-size: 14px;
+  color: var(--gg-gold-strong);
+}
+
+.detail-foot {
+  margin-top: 16px;
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .profile-page {
+    padding: 16px 14px 20px;
+    min-height: 0;
+  }
+
+  .profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-panel--wide {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .record-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .record-row__right {
+    grid-column: 2;
+    align-items: flex-start;
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  .id-card__ops {
+    flex-direction: column;
+  }
 }
 </style>

@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: ee1a9111a266e63ab5b365271262c0db_b4605bffb58511f19286525400638852
+    ReservedCode1: dKedjF3ZBlygZChIcV57nfiYtlGQfqytL34D0eILwlZmhEJ8zQ5QvpcYX66OjHh63jogEnnp8YzkzD2u2qXOQu4ckcFF4gZsEpHoZSZzI7MxTNwFR93GRXP3WxOxsgDIfRRx5MIElCBxt02Kk4TXH5LJYUET8j8fkAbNDP31ikzxenQoebuNNh9lUfo=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: ee1a9111a266e63ab5b365271262c0db_b4605bffb58511f19286525400638852
+    ReservedCode2: dKedjF3ZBlygZChIcV57nfiYtlGQfqytL34D0eILwlZmhEJ8zQ5QvpcYX66OjHh63jogEnnp8YzkzD2u2qXOQu4ckcFF4gZsEpHoZSZzI7MxTNwFR93GRXP3WxOxsgDIfRRx5MIElCBxt02Kk4TXH5LJYUET8j8fkAbNDP31ikzxenQoebuNNh9lUfo=
+---
+
 # GridGo - 大富翁游戏技术选型文档
 
 ## 一、项目概述
@@ -7,9 +18,9 @@
 | 项目名称 | GridGo（大富翁） |
 | 项目类型 | 前后端分离的 Web 在线棋盘游戏 |
 | 核心玩法 | 经典大富翁：掷骰子、买地、收租、事件卡、建造升级 |
-| 游戏模式 | 在线多人实时联机 + 本地单人（vs AI） |
+| 游戏模式 | 在线多人实时联机（同房 AI 人机混战 + 观战） |
 | 玩家规模 | 1-8 人（支持不同难度 AI 人机） |
-| 部署方式 | 先本地开发，后续 Docker 容器化部署 |
+| 部署方式 | 本地开发（venv + pnpm）与 Docker Compose 双形态，均已可用 |
 
 ---
 
@@ -37,10 +48,12 @@
                           └───────┬────────┘
                                   │
                           ┌───────▼────────┐
-                          │     MySQL       │
+                          │   PostgreSQL    │
                           │  (持久化存储)    │
                           └────────────────┘
 ```
+
+> 上图为容器部署形态；本地开发时前端由 Vite dev server（3000）承担静态资源与 `/api`、`/ws` 代理，无独立 Nginx 进程。
 
 ### 架构模式
 
@@ -59,10 +72,10 @@
 
 | 技术 | 选型 | 版本 | 选型理由 |
 |------|------|------|----------|
-| 框架 | **Vue 3** | 3.4+ | 组合式API更灵活、TypeScript支持好、生态成熟；相比React，模板语法更直观适合游戏UI |
-| 语言 | **TypeScript** | 5.x | 类型安全，减少运行时错误，IDE支持优秀 |
-| 构建工具 | **Vite** | 5.x | 极速HMR、开箱即用、Vue官方推荐 |
-| 包管理器 | **pnpm** | 9.x | 节省磁盘空间、安装速度快、monorepo友好 |
+| 框架 | **Vue 3** | 3.5.39（来源 `package.json`） | 组合式API更灵活、TypeScript支持好、生态成熟；相比React，模板语法更直观适合游戏UI |
+| 语言 | **TypeScript** | ~6.0.2 | 类型安全，减少运行时错误，IDE支持优秀 |
+| 构建工具 | **Vite** | ^8.1.1 | 极速HMR、开箱即用、Vue官方推荐 |
+| 包管理器 | **pnpm** | `pnpm-lock.yaml` 已提交 | 节省磁盘空间、安装速度快、monorepo友好 |
 
 ### 3.2 游戏渲染
 
@@ -101,9 +114,9 @@
 
 | 技术 | 选型 | 选型理由 |
 |------|------|----------|
-| 代码规范 | **ESLint + Prettier** | 统一代码风格 |
-| 提交规范 | **husky + lint-staged + commitlint** | 规范化提交 |
-| 音效 | **Howler.js** | Web Audio API 封装，支持多格式音效播放 |
+| 类型检查 | **tsc** | `pnpm build` 前置执行 `tsc`；当前无 ESLint / Prettier / husky 配置 |
+| 单元测试 | **Vitest + @vue/test-utils + jsdom** | `pnpm test` / `pnpm test:watch` |
+| 音效 | **Howler.js** | 依赖已安装；音效资源与调用尚未落地（规划中） |
 
 ---
 
@@ -126,7 +139,7 @@
 
 | 技术 | 选型 | 选型理由 |
 |------|------|----------|
-| 关系数据库 | **MySQL 8.0** | 生态成熟、运维成本低，支持JSON类型存储灵活的游戏配置，社区资源丰富 |
+| 关系数据库 | **PostgreSQL 16** | 原生 JSONB 存储灵活的游戏配置，事务与并发能力强，社区资源丰富 |
 | ORM | **SQLAlchemy 2.0** | Python生态最成熟的ORM，2.0版本原生支持async |
 | 数据库迁移 | **Alembic** | SQLAlchemy官方迁移工具 |
 | 缓存 | **Redis 7** | 房间状态缓存、在线玩家管理、排行榜、会话存储 |
@@ -137,7 +150,7 @@
 |------|------|----------|
 | 认证方案 | **JWT (JSON Web Token)** | 无状态认证，适合前后端分离；配合Refresh Token机制 |
 | JWT 库 | **PyJWT** | 轻量级JWT实现 |
-| 密码加密 | **bcrypt (passlib)** | 行业标准密码哈希 |
+| 密码加密 | **bcrypt** | 行业标准密码哈希（直接使用 `bcrypt` 库，无 passlib） |
 | CORS | **FastAPI 内置 CORSMiddleware** | 开箱即用 |
 | 数据校验 | **Pydantic V2** | FastAPI内置，请求/响应数据验证 |
 
@@ -153,19 +166,21 @@
 > **通信协议设计（WebSocket消息格式）**：
 > ```json
 > {
->   "type": "game.action",
->   "data": { "action": "roll_dice" },
->   "seq": 42,
->   "timestamp": 1700000000
+>   "type": "game.roll_dice",
+>   "data": {},
+>   "timestamp": 1758380001200
 > }
 > ```
 >
-> 核心消息类型：
-> - `room.*` - 房间相关（创建/加入/离开/准备）
-> - `game.*` - 游戏操作（掷骰子/买地/建造/使用道具）
-> - `state.*` - 状态同步（完整快照/增量更新）
-> - `chat.*` - 聊天消息
-> - `system.*` - 系统通知（断线/重连/错误）
+> 信封固定为 `{type, data, timestamp}`，**不含 `seq`**（前后端均不产生、不校验序号）。
+>
+> 核心消息类型（与 `app/api/ws/game_ws.py` 一致）：
+> - `state.*` - 状态同步（`state.snapshot` 首帧 / `state.update`）
+> - `game.*` - 对局操作与广播（掷骰、买地、建造、拍卖、交易等）
+> - `chat.*` - 聊天（`chat.send` 上行 / `chat.message` 广播）
+> - `system.*` - 系统通知（心跳 `system.ping` / `system.pong`、上下线、重连、错误）
+>
+> 房间相关操作走 REST（`/api/v1/rooms`），WebSocket 不承载 `room.*` 消息。
 
 ### 4.5 AI 人机
 
@@ -174,7 +189,7 @@
 | AI 框架 | **自研策略引擎** | 大富翁AI核心是决策树+权重评估，无需ML框架 |
 | 简单难度 | **随机策略** | 随机决策，适合新手 |
 | 中等难度 | **规则引擎 + 启发式** | 基于规则的决策：优先买地、适度升级、保留现金 |
-| 困难难度 | **蒙特卡洛模拟 / Minimax** | 模拟多步后的最优决策 |
+| 困难难度 | **ROI 规则评估** | 按租金回报率（> 5%）与回本回合数（< 10）决策；**不含蒙特卡洛 / Minimax 模拟** |
 
 > **AI 决策流程**：
 > ```
@@ -189,13 +204,14 @@
 
 | 模块 | 说明 |
 |------|------|
-| **GameRoom** | 游戏房间生命周期管理 |
-| **GameBoard** | 棋盘数据模型（地块、价格、租金规则） |
-| **GameEngine** | 核心游戏逻辑（回合制、骰子、移动、交易、事件） |
-| **PlayerState** | 玩家状态（位置、现金、地产、道具、状态效果） |
-| **EventManager** | 事件系统（机会卡、命运卡、税收等随机事件） |
-| **TurnManager** | 回合管理（当前玩家、操作顺序、超时处理） |
-| **TradeManager** | 交易管理（玩家间地产/现金交易） |
+| `app/game/engine.py` | `GameEngine`：回合机、骰子与移动、地块效果、拍卖、交易、破产与结算 |
+| `app/game/schemas.py` | `GameState` / `PlayerState` / `TileState` / `AuctionState` / `TradeOffer` / 枚举定义 |
+| `app/game/events.py` | WebSocket 连接管理与房间广播（`ws_manager`） |
+| `app/game/replay.py` | 操作序列压缩编码与回放 |
+| `app/game/ai/player.py` | `BaseAIPlayer` / `EasyAI` / `MediumAI` / `HardAI` / `AIPlayerFactory` |
+| `app/services/game.py` | 对局服务（初始化、操作分发、聊天、回放查询） |
+| `app/services/room.py` | 房间生命周期与 Redis 运行时状态 |
+| `app/services/map.py` | 地图模板加载与缓存 |
 
 ---
 
@@ -205,46 +221,34 @@
 
 ```
 gridgo-web/
-├── public/
-│   └── assets/              # 静态资源（图片、音效）
 ├── src/
-│   ├── api/                 # API 接口封装
-│   │   ├── rest.ts          # REST API
-│   │   └── ws.ts            # WebSocket 封装
+│   ├── api/                 # rest.ts / ws.ts / auth.ts / room.ts / chat.ts / friend.ts / user.ts / leaderboard.ts / replay.ts
 │   ├── assets/              # 构建时资源
 │   ├── components/          # 通用组件
 │   │   ├── board/           # 棋盘相关组件
 │   │   ├── player/          # 玩家信息组件
 │   │   ├── card/            # 卡片/弹窗组件
 │   │   └── common/          # 通用UI组件
-│   ├── composables/         # 组合式函数
-│   │   ├── useGame.ts       # 游戏逻辑
-│   │   ├── useWebSocket.ts  # WebSocket连接
-│   │   └── useAnimation.ts  # 动画控制
-│   ├── game/                # 游戏核心
-│   │   ├── renderer/        # Canvas 渲染器
-│   │   ├── entities/        # 游戏实体（棋子、地块）
-│   │   └── animations/      # 动画定义
+│   ├── composables/         # useGame.ts / useChat.ts / useWebSocket.ts / useAnimation.ts
+│   ├── game/                # renderer.ts / entities.ts / board.ts / animations.ts / replayEngine.ts
 │   ├── layouts/             # 布局组件
-│   ├── pages/               # 页面
-│   │   ├── Home.vue         # 首页/大厅
-│   │   ├── Room.vue         # 房间/等待
-│   │   └── Game.vue         # 游戏主界面
+│   ├── pages/               # Home / Room / Game / Login / Register / Profile / Friends / Leaderboard / Replay .vue
 │   ├── router/              # 路由配置
-│   ├── stores/              # Pinia 状态
-│   │   ├── user.ts          # 用户状态
-│   │   ├── room.ts          # 房间状态
-│   │   └── game.ts          # 游戏状态
+│   ├── stores/              # Pinia：user.ts / room.ts / game.ts / replay.ts
 │   ├── styles/              # 全局样式
 │   ├── types/               # TypeScript 类型定义
 │   ├── utils/               # 工具函数
 │   ├── App.vue
 │   └── main.ts
 ├── index.html
-├── vite.config.ts
+├── nginx.conf               # 容器 Nginx 配置（反代 /api、/ws）
+├── package.json
+├── pnpm-lock.yaml
 ├── tsconfig.json
 ├── uno.config.ts
-└── package.json
+├── vite.config.ts
+├── vitest.config.ts
+└── Dockerfile
 ```
 
 ### 5.2 后端项目结构
@@ -254,43 +258,26 @@ gridgo-server/
 ├── alembic/                  # 数据库迁移
 ├── app/
 │   ├── api/                  # API 路由
-│   │   ├── v1/
-│   │   │   ├── auth.py       # 认证接口
-│   │   │   ├── room.py       # 房间接口
-│   │   │   ├── game.py       # 游戏接口
-│   │   │   └── user.py       # 用户接口
-│   │   └── ws/
-│   │       ├── game_ws.py    # 游戏 WebSocket
-│   │       └── chat_ws.py    # 聊天 WebSocket
-│   ├── core/                 # 核心配置
-│   │   ├── config.py         # 配置管理
-│   │   ├── security.py       # 安全/认证
-│   │   └── events.py         # 事件定义
+│   │   ├── middleware/access_log.py
+│   │   ├── v1/               # auth.py / room.py / game.py / user.py / chat.py / friend.py / leaderboard.py
+│   │   └── ws/game_ws.py     # 游戏 WebSocket（无独立 chat_ws）
+│   ├── core/                 # config.py / database.py / deps.py / logging.py / redis.py / security.py
 │   ├── game/                 # 游戏引擎
 │   │   ├── engine.py         # 游戏主引擎
-│   │   ├── board.py          # 棋盘模型
-│   │   ├── player.py         # 玩家状态
-│   │   ├── turn.py           # 回合管理
-│   │   ├── events.py         # 事件/卡片系统
-│   │   ├── trade.py          # 交易系统
-│   │   └── ai/               # AI 模块
-│   │       ├── base.py       # AI 基类
-│   │       ├── easy.py       # 简单 AI
-│   │       ├── medium.py     # 中等 AI
-│   │       └── hard.py       # 困难 AI
-│   ├── models/               # 数据库模型
-│   │   ├── user.py
-│   │   ├── room.py
-│   │   └── game_record.py
+│   │   ├── events.py         # WebSocket 连接管理与广播
+│   │   ├── replay.py         # 操作序列压缩编码 / 回放
+│   │   ├── schemas.py        # 状态与枚举模型
+│   │   └── ai/player.py      # AI 难度实现与工厂
+│   ├── models/               # user.py / room.py / stats.py / friend.py / game_record.py / map.py
 │   ├── schemas/              # Pydantic 模型
 │   ├── services/             # 业务逻辑层
 │   ├── utils/                # 工具函数
 │   └── main.py               # 应用入口
-├── tests/                    # 测试
-│   ├── unit/
-│   └── integration/
+├── scripts/seed_classic_map.py   # classic 地图与卡牌种子
+├── tests/                    # 测试（unit / integration）
 ├── requirements.txt
 ├── pyproject.toml
+├── .env.example
 └── Dockerfile
 ```
 
@@ -303,9 +290,9 @@ gridgo-server/
 | 策略 | 说明 |
 |------|------|
 | **权威服务器** | 后端是唯一状态源，前端只负责渲染和发送操作 |
-| **增量同步** | 正常游戏时仅推送变化的字段（位置、现金等），减少带宽 |
-| **全量快照** | 关键时刻（回合开始、重连）推送完整游戏状态 |
-| **操作确认** | 前端操作需等待服务器确认后才生效，防止作弊 |
+| **全量快照** | `state.snapshot`（连接首帧）与 `state.update`（每次状态落盘后）均为**完整状态**；当前未实现字段级增量同步 |
+| **事件广播** | 具体操作另发细粒度事件（如 `game.dice_result`、`game.player_moved`）供前端播放动画 |
+| **操作回执** | 无独立 ack 帧；服务端处理后以广播消息 + 新快照回执，非法/越权操作返回 `system.error` |
 
 ### 6.2 断线重连机制
 
@@ -340,53 +327,35 @@ gridgo-server/
 | 工具 | 选型 |
 |------|------|
 | 版本控制 | Git + GitHub/GitLab |
-| Python 环境 | uv（极速Python包管理器） |
-| Node 环境 | nvm + pnpm |
+| Python 环境 | venv + pip（依赖见 `requirements.txt` / `pyproject.toml`） |
+| Node 环境 | Node.js 18+ + pnpm |
 | IDE | VS Code / Cursor |
 | API 调试 | FastAPI 自带 Swagger UI |
 | WebSocket 调试 | Postman / wscat |
 
-### 7.2 Docker 部署（后续）
+### 7.2 Docker 部署（已落地）
 
-```yaml
-# docker-compose.yml 预览
-services:
-  nginx:
-    image: nginx:alpine
-    ports: ["80:80"]
-    volumes: [./nginx.conf:/etc/nginx/nginx.conf]
+`docker-compose.yml` 编排四个服务：
 
-  backend:
-    build: ./gridgo-server
-    environment:
-      - DATABASE_URL=mysql+aiomysql://...
-      - REDIS_URL=redis://redis:6379
-    depends_on: [mysql, redis]
+| 服务 | 镜像 / 构建 | 宿主端口 | 说明 |
+|------|-------------|:--------:|------|
+| `postgres` | `postgres:16-alpine` | 3307（→5432） | 镜像按 `POSTGRES_DB=gridgo` 自动建库；健康检查 `pg_isready` |
+| `redis` | `redis:7-alpine` | 6380 | 运行时状态与会话 |
+| `server` | 构建 `./gridgo-server` | 8001 | 启动即执行 `alembic upgrade head` + 地图种子 + uvicorn |
+| `web` | 构建 `./gridgo-web` | 80 | 容器内 Nginx 托管静态资源并反代 `/api`、`/ws` 到 `server:8001` |
 
-  frontend:
-    build: ./gridgo-web
-    # 构建后静态文件由 nginx 托管
+启动命令 `docker compose up -d --build`，环境变量见 `docker/.env.docker`，完整步骤见仓库根 `README.md`。
 
-  mysql:
-    image: mysql:8.0
-    environment:
-      - MYSQL_ROOT_PASSWORD=rootpassword
-      - MYSQL_DATABASE=gridgo
-    volumes: [mysqldata:/var/lib/mysql]
+> Nginx **不再作为独立服务**，而是打包进 `web` 镜像（配置文件 `gridgo-web/nginx.conf`）。
 
-  redis:
-    image: redis:7-alpine
-    volumes: [redisdata:/data]
-```
-
-### 7.3 CI/CD（后续）
+### 7.3 CI/CD（部分落地）
 
 | 阶段 | 工具 |
 |------|------|
-| 代码检查 | Ruff (Python) + ESLint (TypeScript) |
-| 单元测试 | pytest + Vitest |
-| 构建 | Docker multi-stage build |
-| 部署 | Docker Compose → 后续可迁移 Kubernetes |
+| 代码检查 | Ruff（Python，配置见 `pyproject.toml`）；前端无 ESLint 配置，仅 `tsc` 类型检查 |
+| 单元测试 | pytest（`tests/unit`、`tests/integration`）+ Vitest（`gridgo-web`） |
+| 构建 | 分别构建 `gridgo-server` / `gridgo-web` 两个镜像 |
+| 部署 | Docker Compose（Kubernetes 迁移仍为规划中） |
 
 ---
 
@@ -399,7 +368,7 @@ services:
 | **前端UI** | Element Plus + UnoCSS | 界面组件和样式 |
 | **前端状态** | Pinia | 状态管理 |
 | **后端框架** | FastAPI + Uvicorn | Web服务和WebSocket |
-| **数据库** | MySQL 8.0 + SQLAlchemy 2.0 | 持久化存储 |
+| **数据库** | PostgreSQL 16 + SQLAlchemy 2.0 | 持久化存储 |
 | **缓存** | Redis | 房间状态、会话、排行榜 |
 | **认证** | JWT + PyJWT | 用户认证 |
 | **AI** | 自研策略引擎 | 人机对战 |
@@ -422,9 +391,17 @@ services:
 
 ## 十、迭代计划
 
-| 阶段 | 内容 | 预计周期 |
-|------|------|----------|
-| **MVP** | 单人vs AI、基础棋盘、买地/收租、掷骰子 | 2-3 周 |
-| **V1.0** | 在线多人、房间系统、建造升级、事件卡 | 3-4 周 |
-| **V1.5** | 交易系统、聊天、断线重连、排行榜 | 2-3 周 |
-| **V2.0** | 多地图、道具系统、赛季、Docker部署 | 3-4 周 |
+版本口径统一为 `0.1.0`（见 `gridgo-server/app/core/config.py`），**不再使用 MVP / V1.0 / V1.5 / V2.0 等阶段版本号**；进展按下表标注（判定标准同 `docs/PROJECT.md`）。
+
+| 能力 | 状态 | 说明 |
+|------|:----:|------|
+| 基础棋盘、掷骰、买地 / 收租 | 已实现 | `app/game/engine.py`、classic 地图种子 |
+| 在线多人、房间系统 | 已实现 | REST `/api/v1/rooms` + Redis 运行时状态 |
+| 建造升级、事件卡（机会 / 命运） | 已实现 | 建筑等级 0-5；机会卡 C01-C10、命运卡 F01-F10 |
+| 交易、聊天、断线重连、排行榜 | 已实现 | `trade_*` 系列、`chat.*`、`player_reconnected`、`/api/v1/leaderboard` |
+| AI 人机（easy / medium / hard） | 已实现 | `app/game/ai/player.py` |
+| Docker 容器化部署 | 已实现 | `docker-compose.yml` 四服务 |
+| 多地图拓展（city / island 等） | 规划中 | 表结构与 `map_id` 链路就绪，仅 classic 有种子数据 |
+| 道具系统、赛季 / 段位、成就 | 规划中 | 无对应模型与接口 |
+| 音效 | 规划中 | `howler` 已安装，无资源与调用 |
+*（内容由AI生成，仅供参考）*

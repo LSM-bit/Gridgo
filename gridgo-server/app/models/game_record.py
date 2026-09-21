@@ -22,7 +22,7 @@ class GameRecord(Base):
     map_id: Mapped[str] = mapped_column(String(32), nullable=False, comment="地图 ID")
     total_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="总回合数")
     player_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="玩家数量")
-    winner_id: Mapped[int] = mapped_column(nullable=True, comment="胜者 user_id（AI 为负数）")
+    winner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="胜者 user_id（AI 为负数）")
     end_reason: Mapped[str] = mapped_column(String(20), nullable=False, comment="结束原因: last_standing / turn_limit / vote_end")
     config_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, comment="对局配置快照 JSON")
     actions: Mapped[str | None] = mapped_column(Text, nullable=True, comment="压缩编码的操作序列")
@@ -37,7 +37,7 @@ class GamePlayer(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     game_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="对局记录 ID")
-    user_id: Mapped[int] = mapped_column(nullable=False, comment="玩家 user_id（AI 为负数）")
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="玩家 user_id（AI 为负数）")
     nickname: Mapped[str] = mapped_column(String(50), nullable=False, comment="显示昵称")
     rank: Mapped[int] = mapped_column(Integer, nullable=False, comment="最终排名")
     total_assets: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="最终总资产")

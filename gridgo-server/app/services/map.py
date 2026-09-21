@@ -1,7 +1,7 @@
 """
 地图加载服务
 
-从 MySQL 加载地图模板（maps, map_tiles, map_station_rent, map_utility_rent, map_cards），
+从 PostgreSQL 加载地图模板（maps, map_tiles, map_station_rent, map_utility_rent, map_cards），
 缓存到 Redis，供游戏引擎初始化时使用。
 """
 
@@ -25,7 +25,7 @@ class MapService:
     @staticmethod
     async def load_map_template(db: AsyncSession, map_id: str) -> dict:
         """
-        加载地图模板，优先从 Redis 缓存读取，未命中则从 MySQL 加载并缓存。
+        加载地图模板，优先从 Redis 缓存读取，未命中则从 PostgreSQL 加载并缓存。
 
         Returns:
             包含地图所有配置的字典:
@@ -45,7 +45,7 @@ class MapService:
         if cached:
             return json.loads(cached)
 
-        # 2. 从 MySQL 加载
+        # 2. 从 PostgreSQL 加载
         # 地图基本信息
         result = await db.execute(select(Map).where(Map.id == map_id, Map.is_active.is_(True)))
         map_obj = result.scalars().first()

@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8001
 
-    # 数据库 - MySQL
-    DATABASE_URL: str = "mysql+aiomysql://root:123456@localhost:3306/gridgo"
+    # 数据库 - PostgreSQL
+    DATABASE_URL: str = "postgresql+asyncpg://gridgo:gridgo123@127.0.0.1:3307/gridgo"
     DATABASE_ECHO: bool = False
 
     # Redis
@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # 雪花 ID（64 位整数，见 app/utils/snowflake.py）
+    SNOWFLAKE_WORKER_ID: int = 0  # 节点 ID（0-1023），多实例部署时区分
 
     # 游戏
     GAME_INITIAL_CASH: int = 1500 # 初始现金

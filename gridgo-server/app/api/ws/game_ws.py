@@ -11,13 +11,11 @@
 
 import time
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.core.database import async_session
 from app.core.logging import app_logger
 from app.game.events import manager as ws_manager
-from app.game.schemas import GamePhase
 from app.services.auth import AuthService
 from app.services.game import GameService
 from app.services.room import RoomService
@@ -66,6 +64,22 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
         await websocket.close(code=4003, reason="缺少 room_id")
         return
 
+    # 成员校验：未加入房间的用户不允许建立连接（防止绕过前端守卫直连 WS）
+    try:
+        room = await RoomService.get_room(room_id)
+    except ValueError:
+        app_logger.warning("WS 房间不存在: user_id=%s, room_id=%s", user_id, room_id)
+        await websocket.close(code=4003, reason="房间不存在")
+        return
+
+    is_member = any(p.user_id == user_id for p in room.players) or any(
+        s.user_id == user_id for s in room.spectators
+    )
+    if not is_member:
+        app_logger.warning("WS 拒绝非成员连接: user_id=%s, room_id=%s", user_id, room_id)
+        await websocket.close(code=4006, reason="你不在该房间中")
+        return
+
     # 检查是否是观战者
     is_spectator = await RoomService.is_spectator(room_id, user_id)
 
@@ -105,6 +119,14 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
     except Exception as e:
         app_logger.warning("WS 重连恢复任务失败: room_id=%s, error=%s", room_id, e)
 
+    # 断线重连：复位玩家连接标记；若此前被判离线则广播 system.player_reconnected
+    # （docs/GAME_FLOW.md 9：≤30s → resume_incremental；30s~3min → resume_snapshot；>3min → left_game）
+    if not is_spectator:
+        try:
+            await GameService.handle_player_connected(room_id, user_id)
+        except Exception as e:
+            app_logger.warning("WS 重连处理失败: room_id=%s, user_id=%s, error=%s", room_id, user_id, e)
+
     # 广播连接通知
     if is_spectator:
         await ws_manager.broadcast(room_id, "system.spectator_connected", {
@@ -122,7 +144,10 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
             msg_type = data.get("type", "")
             msg_data = data.get("data", {})
 
-            app_logger.info("WS ← room=%s user=%s type=%s data=%s", room_id, user_id, msg_type, _truncate(str(msg_data)))
+            app_logger.info(
+                "WS ← room=%s user=%s type=%s data=%s",
+                room_id, user_id, msg_type, _truncate(str(msg_data)),
+            )
 
             await _handle_message(room_id, user_id, msg_type, msg_data, is_spectator=is_spectator)
 
@@ -138,8 +163,14 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
                 "user_id": user_id,
             })
         else:
+            # 记录离线时刻，用于判定重连恢复档位（docs/GAME_FLOW.md 9）
+            try:
+                await GameService.handle_player_disconnected(room_id, user_id)
+            except Exception as e:
+                app_logger.warning("WS 断线标记失败: room_id=%s, user_id=%s, error=%s", room_id, user_id, e)
             await ws_manager.broadcast(room_id, "system.player_disconnected", {
                 "player_id": user_id,
+                "mode": "offline",
             })
 
 
@@ -162,11 +193,25 @@ SPECTATOR_BLOCKED_TYPES = {
     "game.end_turn",
     "game.jail_pay_bail",
     "game.jail_use_card",
+    "game.trade_offer",
+    "game.trade_accept",
+    "game.trade_reject",
+    "chat.send",
+}
+
+
+# 文档历史别名 → 当前规范类型（docs/PROJECT.md 7.2.2）
+ALIAS_TYPES = {
+    "game.decline_buy": "game.decline_property",
+    "game.jail_pay": "game.jail_pay_bail",
 }
 
 
 async def _handle_message(room_id: str, user_id: int, msg_type: str, data: dict, *, is_spectator: bool = False) -> None:
     """消息路由"""
+
+    # ─── 兼容别名归一 ───
+    msg_type = ALIAS_TYPES.get(msg_type, msg_type)
 
     # ─── 心跳 ───
     if msg_type == "system.ping":
@@ -243,6 +288,34 @@ async def _handle_message(room_id: str, user_id: int, msg_type: str, data: dict,
 
     elif msg_type == "game.jail_use_card":
         await GameService.handle_jail_use_card(room_id, user_id)
+
+    # ─── 玩家间交易（docs/PROJECT.md 7.2） ───
+    elif msg_type == "game.trade_offer":
+        await GameService.handle_trade_offer(room_id, user_id, data)
+
+    elif msg_type == "game.trade_accept":
+        trade_id = data.get("trade_id")
+        if trade_id:
+            await GameService.handle_trade_accept(room_id, user_id, str(trade_id))
+
+    elif msg_type == "game.trade_reject":
+        trade_id = data.get("trade_id")
+        if trade_id:
+            await GameService.handle_trade_reject(room_id, user_id, str(trade_id))
+
+    # ─── 聊天（docs/PROJECT.md 8.4） ───
+    elif msg_type == "chat.send":
+        # 载荷字段以 content 为准，兼容文档旧写法 message
+        content = data.get("content")
+        if content is None:
+            content = data.get("message")
+        if content:
+            await GameService.handle_chat_send(room_id, user_id, str(content))
+
+    # ─── 兼容：拍卖由服务端广播，客户端不可主动发起 ───
+    elif msg_type == "game.auction_start":
+        # 客户端不主动发起拍卖，仅作兼容提示（拍卖由服务端广播）
+        app_logger.warning("WS 客户端尝试主动发起拍卖，已忽略: room=%s user=%s", room_id, user_id)
 
     else:
         app_logger.warning("WS 未知消息类型: room=%s user=%s type=%s", room_id, user_id, msg_type)

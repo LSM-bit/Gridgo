@@ -18,6 +18,9 @@ class CreateRoomRequest(BaseModel):
     map_id: str = Field(default="classic", description="地图 ID")
     ai_count: int = Field(default=0, ge=0, le=8, description="AI 数量")
     ai_difficulty: str = Field(default="easy", description="AI 难度: easy/medium/hard")
+    password: str | None = Field(
+        default=None, min_length=4, max_length=32, description="房间密码（4-32 位，可选）"
+    )
 
     def model_post_init(self, __context) -> None:
         """校验 ai_count 不超过 max_players"""
@@ -33,6 +36,10 @@ class UpdateRoomRequest(BaseModel):
     map_id: str | None = Field(default=None, description="地图 ID")
     ai_count: int | None = Field(default=None, ge=0, le=8, description="AI 数量")
     ai_difficulty: str | None = Field(default=None, description="AI 难度: easy/medium/hard")
+    password: str | None = Field(
+        default=None, min_length=4, max_length=32, description="新房间密码（4-32 位）"
+    )
+    clear_password: bool = Field(default=False, description="是否清除房间密码")
 
 
 class JoinRoomRequest(BaseModel):
@@ -40,6 +47,7 @@ class JoinRoomRequest(BaseModel):
 
     code: str = Field(..., min_length=6, max_length=6, description="6位房间代码")
     as_spectator: bool = Field(default=False, description="以观战者身份加入")
+    password: str | None = Field(default=None, description="房间密码（有密码的房间必填）")
 
 
 class SwitchRoleRequest(BaseModel):
@@ -89,6 +97,7 @@ class RoomInfo(BaseModel):
     players: list[RoomPlayer] = []
     spectators: list[SpectatorInfo] = []  # 观战者列表
     max_spectators: int = 10  # 最大观战人数
+    has_password: bool = False  # 是否设置了房间密码（不回传密码本身）
     created_at: datetime | None = None
 
 
@@ -104,4 +113,5 @@ class RoomListItem(BaseModel):
     map_id: str = "classic"
     ai_count: int = 0
     spectator_count: int = 0  # 观战人数
+    has_password: bool = False  # 是否有房间密码
     status: str

@@ -1,0 +1,824 @@
+/* =========================================================
+   GridGo 设计系统 —— 「复古桌游票据 / letterpress 印刷品」
+   ---------------------------------------------------------
+   设计语言（唯一定义处，所有页面/组件以此为唯一来源）：
+   · 纸底：暖米纸 + 细网格 + 印刷网点（无纯白、无蓝渐变）
+   · 主文：墨黑（近黑非黑），衬线标题 + 无衬线正文
+   · 强调：朱砂印泥红 + 铜金；辅以墨绿/深赭
+   · 形态：锐角（1–3px）、票据双描边、齿孔/虚线分隔、编号式排版
+   · 层级：以纸色明度差 + 极硬投影表达，而非大圆角 + 柔和阴影
+   ========================================================= */
+
+:root {
+  /* ── 纸与墨 ── */
+  --gg-bg: #ece0cc;
+  --gg-bg-deep: #e2d3ba;
+  --gg-surface: #fbf5e7;
+  --gg-surface-2: #f4ead6;
+  --gg-surface-3: #ebdec4;
+  --gg-ink: #231f19;
+  --gg-ink-2: #4c4438;
+  --gg-ink-3: #7d7365;
+  --gg-ink-4: #a89c88;
+  --gg-border: #dccdaf;
+  --gg-border-strong: #c4b090;
+  --gg-line: rgba(88, 68, 42, 0.16);
+
+  /* ── 强调色 ── */
+  --gg-brand: #b0392c; /* 朱砂 */
+  --gg-brand-strong: #8c261a;
+  --gg-brand-soft: #f5e2dc;
+  --gg-gold: #a8792a; /* 铜金 */
+  --gg-gold-strong: #835c11;
+  --gg-gold-soft: #f4e9d0;
+  --gg-green: #3f664e; /* 墨绿 */
+  --gg-green-soft: #e2ebe1;
+  --gg-red: #8c261a;
+  --gg-red-soft: #f3ddd8;
+  --gg-purple: #3d4a63; /* 靛墨（次要） */
+  --gg-night: #2a251e;
+  --gg-night-2: #3b342a;
+
+  /* ── 纸面纹理（印刷品基底） ── */
+  --gg-grid:
+    repeating-linear-gradient(0deg, var(--gg-line) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, var(--gg-line) 0 1px, transparent 1px 24px);
+  --gg-fiber: radial-gradient(rgba(120, 94, 58, 0.055) 0.5px, transparent 0.6px);
+  --gg-page-glow:
+    radial-gradient(900px 520px at 8% -6%, rgba(176, 57, 44, 0.08), transparent 62%),
+    radial-gradient(760px 460px at 104% 4%, rgba(168, 121, 42, 0.11), transparent 60%);
+  --gg-paper-lines:
+    repeating-linear-gradient(180deg, rgba(88, 68, 42, 0.09) 0 1px, transparent 1px 28px);
+  --gg-dotfield: radial-gradient(rgba(88, 68, 42, 0.14) 0.7px, transparent 0.8px);
+
+  /* ── 渐变（仅用于印块，不使用蓝紫渐变） ── */
+  --gg-grad-brand: linear-gradient(180deg, #bd4433, #8c261a);
+  --gg-grad-gold: linear-gradient(135deg, #c2913a, #8a6212);
+  --gg-grad-night: linear-gradient(180deg, #342e26, #221e18);
+
+  /* ── 圆角：票据是锐角 ── */
+  --gg-radius-lg: 3px;
+  --gg-radius: 2px;
+  --gg-radius-sm: 2px;
+  --gg-radius-xs: 1px;
+  --gg-pill: 2px;
+
+  /* ── 阴影：纸叠硬边 ── */
+  --gg-shadow-1: 0 1px 0 rgba(72, 53, 28, 0.07), 0 1px 2px rgba(72, 53, 28, 0.1);
+  --gg-shadow-2: 0 1px 0 rgba(72, 53, 28, 0.07), 0 7px 16px -8px rgba(72, 53, 28, 0.3);
+  --gg-shadow-3: 0 2px 0 rgba(72, 53, 28, 0.07), 0 20px 38px -16px rgba(72, 53, 28, 0.4);
+  --gg-shadow-brand: 0 2px 0 var(--gg-brand-strong);
+  --gg-inset-line: inset 0 0 0 1px rgba(251, 245, 231, 0.9);
+
+  /* ── 字体 ── */
+  --gg-font-display: Georgia, 'Songti SC', 'STSong', 'Noto Serif SC', SimSun, serif;
+  --gg-font-body: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft JhengHei',
+    'Heiti SC', sans-serif;
+  --gg-font-mono: 'Courier New', Courier, 'Songti SC', monospace;
+
+  /* ── 间距节奏 ── */
+  --gg-gap-xs: 4px;
+  --gg-gap-sm: 8px;
+  --gg-gap: 14px;
+  --gg-gap-lg: 22px;
+  --gg-page-pad: 22px;
+  --gg-shell-bar: 58px;
+
+  /* ── 动效：线性/机械感，不用弹跳 ── */
+  --gg-ease: cubic-bezier(0.33, 0.7, 0.35, 1);
+  --gg-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --gg-dur-fast: 0.12s;
+  --gg-dur: 0.2s;
+  --gg-dur-slow: 0.34s;
+
+  /* ── Element Plus 对齐 ── */
+  --el-color-primary: var(--gg-brand);
+  --el-color-primary-light-3: #c15b4b;
+  --el-color-primary-light-5: #d1897c;
+  --el-color-primary-light-7: #e2b5ab;
+  --el-color-primary-light-8: #ecc9c1;
+  --el-color-primary-light-9: var(--gg-brand-soft);
+  --el-color-primary-dark-2: var(--gg-brand-strong);
+  --el-color-success: var(--gg-green);
+  --el-color-warning: var(--gg-gold);
+  --el-color-danger: var(--gg-red);
+  --el-color-error: var(--gg-red);
+  --el-color-info: #8a8071;
+  --el-text-color-primary: var(--gg-ink);
+  --el-text-color-regular: var(--gg-ink-2);
+  --el-text-color-secondary: var(--gg-ink-3);
+  --el-text-color-placeholder: var(--gg-ink-4);
+  --el-border-color: var(--gg-border-strong);
+  --el-border-color-light: var(--gg-border);
+  --el-border-color-lighter: var(--gg-border);
+  --el-border-radius-base: 2px;
+  --el-border-radius-small: 2px;
+  --el-border-radius-round: 2px;
+  --el-fill-color-blank: var(--gg-surface);
+  --el-fill-color-light: var(--gg-surface-2);
+  --el-bg-color-page: var(--gg-bg);
+  --el-box-shadow-light: var(--gg-shadow-2);
+  --el-font-size-base: 14px;
+  --el-font-family: var(--gg-font-body);
+}
+
+/* ── 基础排版 ── */
+html,
+body {
+  background-color: var(--gg-bg);
+  background-image: var(--gg-grid), var(--gg-page-glow);
+  background-attachment: fixed;
+  background-size: 24px 24px, 24px 24px, auto, auto;
+  color: var(--gg-ink);
+  font-family: var(--gg-font-body);
+  font-size: 14px;
+  line-height: 1.6;
+  font-feature-settings: 'tnum' 1;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: var(--gg-fiber);
+  background-size: 6px 6px;
+  opacity: 0.55;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--gg-font-display);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+::selection {
+  background: rgba(176, 57, 44, 0.2);
+}
+
+:focus-visible {
+  outline: 2px solid var(--gg-brand);
+  outline-offset: 1px;
+}
+
+/* ── 滚动条（细铅线） ── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gg-border-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a9926f;
+  background-clip: padding-box;
+}
+
+/* =========================================================
+   票据／印刷拼版通用构件
+   ========================================================= */
+
+/* 票据面板：亚麻边 + 内描边（双线票据） */
+.gg-ticket {
+  position: relative;
+  background: var(--gg-surface);
+  border: 1px solid var(--gg-border-strong);
+  box-shadow: var(--gg-shadow-1);
+}
+
+.gg-ticket::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px solid var(--gg-border);
+  pointer-events: none;
+}
+
+/* 票头编号行 */
+.gg-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--gg-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gg-ink-3);
+}
+
+.gg-kicker::before {
+  content: '';
+  width: 14px;
+  height: 1px;
+  background: var(--gg-border-strong);
+}
+
+/* 齿孔／撕线分隔 */
+.gg-perf {
+  height: 1px;
+  border-top: 1px dashed var(--gg-border-strong);
+}
+
+/* 印章 */
+.gg-stamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border: 1.5px solid var(--gg-brand);
+  color: var(--gg-brand);
+  font-family: var(--gg-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  transform: rotate(-3deg);
+  opacity: 0.9;
+}
+
+.gg-stamp--gold {
+  border-color: var(--gg-gold);
+  color: var(--gg-gold-strong);
+}
+
+.gg-stamp--ink {
+  border-color: var(--gg-ink-3);
+  color: var(--gg-ink-3);
+}
+
+/* 编号式小节标题 */
+.gg-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+  font-family: var(--gg-font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gg-ink);
+}
+
+.gg-section-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--gg-border-strong) 0 4px, transparent 4px 8px);
+}
+
+/* 弹性填充：用于消除页面下半部空白 */
+.gg-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 网点底纹块 */
+.gg-dotfield {
+  background-image: radial-gradient(rgba(88, 68, 42, 0.14) 0.7px, transparent 0.8px);
+  background-size: 8px 8px;
+}
+
+/* 斜纹警示块 */
+.gg-hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(88, 68, 42, 0.1) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* 数字等宽 */
+.gg-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* 铜金／朱砂墨字 */
+.gg-ink-red {
+  color: var(--gg-brand);
+}
+
+.gg-ink-gold {
+  color: var(--gg-gold-strong);
+}
+
+/* 撕边纸张（上下齿孔） */
+.gg-torn {
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 8px);
+  mask-image: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 8px);
+}
+
+/* =========================================================
+   Element Plus 票据化重绘
+   ========================================================= */
+
+/* ── 卡片 ── */
+.el-card {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+  box-shadow: var(--gg-shadow-1) !important;
+  transition: box-shadow var(--gg-dur) var(--gg-ease), border-color var(--gg-dur) var(--gg-ease);
+}
+
+.el-card.is-always-shadow,
+.el-card.is-hover-shadow:hover {
+  box-shadow: var(--gg-shadow-2) !important;
+}
+
+.el-card__header {
+  padding: 10px 14px;
+  border-bottom: 1px dashed var(--gg-border-strong);
+  background: var(--gg-surface-2);
+  font-family: var(--gg-font-display);
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.04em;
+  color: var(--gg-ink);
+}
+
+.el-card__body {
+  padding: 14px;
+}
+
+/* ── 按钮：印块 + 硬边 ── */
+.el-button {
+  border-radius: 2px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  border-color: var(--gg-border-strong);
+  background: var(--gg-surface);
+  color: var(--gg-ink-2);
+  transition: background-color var(--gg-dur-fast) linear, color var(--gg-dur-fast) linear,
+    box-shadow var(--gg-dur-fast) linear, border-color var(--gg-dur-fast) linear,
+    transform var(--gg-dur-fast) linear;
+}
+
+.el-button:not(.is-disabled):hover {
+  background: var(--gg-surface-2);
+  border-color: var(--gg-ink-3);
+  color: var(--gg-ink);
+  transform: translateY(-1px);
+}
+
+.el-button:not(.is-disabled):active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.el-button--primary:not(.is-disabled) {
+  background: var(--gg-brand);
+  border-color: var(--gg-brand-strong);
+  color: #fdf6ef;
+  box-shadow: var(--gg-shadow-brand);
+}
+
+.el-button--primary:not(.is-disabled):hover {
+  background: #bd4433;
+  border-color: var(--gg-brand-strong);
+  color: #fff8f2;
+  box-shadow: 0 2px 0 var(--gg-brand-strong);
+}
+
+.el-button--success:not(.is-disabled),
+.el-button--warning:not(.is-disabled) {
+  box-shadow: 0 2px 0 rgba(60, 45, 25, 0.3);
+}
+
+.el-button.is-text,
+.el-button.is-link {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.el-button.is-text:not(.is-disabled):hover,
+.el-button.is-link:not(.is-disabled):hover {
+  background: var(--gg-surface-2);
+  transform: none;
+}
+
+.el-button--large {
+  height: 42px;
+}
+
+/* ── 输入类：填单下划线 ── */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: 2px;
+  background: #fdfaf1;
+  box-shadow: 0 0 0 1px var(--gg-border-strong) inset;
+  transition: box-shadow var(--gg-dur) var(--gg-ease), background-color var(--gg-dur) var(--gg-ease);
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--gg-ink-4) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  background: #fffdf7;
+  box-shadow: 0 0 0 1px var(--gg-brand) inset, 0 2px 0 -1px var(--gg-brand-soft) !important;
+}
+
+.el-input__inner {
+  font-family: var(--gg-font-body);
+}
+
+.el-input-group__append,
+.el-input-group__prepend {
+  border-radius: 2px;
+  background: var(--gg-surface-2);
+}
+
+.el-input-number {
+  border-radius: 2px;
+}
+
+/* ── 表单标签：印刷件号签 ── */
+.el-form-item__label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gg-ink-3);
+}
+
+/* ── 表格：铅字账单 ── */
+.el-table {
+  border-radius: 2px;
+  --el-table-border-color: var(--gg-border);
+  --el-table-header-bg-color: var(--gg-surface-2);
+  --el-table-header-text-color: var(--gg-ink-2);
+  --el-table-row-hover-bg-color: var(--gg-surface-2);
+  --el-table-text-color: var(--gg-ink-2);
+  background: transparent;
+  color: var(--gg-ink-2);
+}
+
+.el-table th.el-table__cell {
+  font-family: var(--gg-font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--gg-border-strong) !important;
+}
+
+.el-table td.el-table__cell,
+.el-table th.el-table__cell {
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--gg-border);
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(244, 234, 214, 0.5);
+}
+
+.el-table__empty-block {
+  background: transparent;
+}
+
+/* ── 弹层 ── */
+.el-dialog {
+  border-radius: 3px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+  box-shadow: var(--gg-shadow-3);
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  margin-right: 0;
+  padding: 14px 20px 10px;
+  border-bottom: 1px dashed var(--gg-border-strong);
+  background: var(--gg-surface-2);
+}
+
+.el-dialog__title {
+  font-family: var(--gg-font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gg-ink);
+  letter-spacing: 0.03em;
+}
+
+.el-dialog__body {
+  padding: 16px 20px;
+  color: var(--gg-ink-2);
+}
+
+.el-dialog__footer {
+  padding: 12px 20px 16px;
+  border-top: 1px dashed var(--gg-border-strong);
+}
+
+.el-overlay {
+  background-color: rgba(38, 30, 20, 0.46);
+}
+
+.el-message-box {
+  border-radius: 3px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+  box-shadow: var(--gg-shadow-3);
+}
+
+.el-message {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+  box-shadow: var(--gg-shadow-2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.el-loading-mask {
+  background-color: rgba(251, 245, 231, 0.74);
+}
+
+/* ── 标签／提示／其它 ── */
+.el-tag {
+  border-radius: 2px;
+  font-family: var(--gg-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  border-width: 1px;
+}
+
+.el-tag--primary {
+  background: var(--gg-brand-soft);
+  border-color: rgba(176, 57, 44, 0.4);
+  color: var(--gg-brand-strong);
+}
+
+.el-tag--success {
+  background: var(--gg-green-soft);
+  border-color: rgba(63, 102, 78, 0.4);
+  color: var(--gg-green);
+}
+
+.el-tag--warning {
+  background: var(--gg-gold-soft);
+  border-color: rgba(168, 121, 42, 0.45);
+  color: var(--gg-gold-strong);
+}
+
+.el-tag--danger {
+  background: var(--gg-red-soft);
+  border-color: rgba(140, 38, 26, 0.4);
+  color: var(--gg-red);
+}
+
+.el-tag--info {
+  background: var(--gg-surface-3);
+  border-color: var(--gg-border-strong);
+  color: var(--gg-ink-3);
+}
+
+.el-alert {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  padding: 10px 12px;
+}
+
+.el-progress-bar__outer {
+  background-color: var(--gg-surface-3);
+  border-radius: 0;
+}
+
+.el-progress-bar__inner {
+  border-radius: 0;
+}
+
+.el-slider__runway {
+  border-radius: 0;
+  background-color: var(--gg-surface-3);
+}
+
+.el-slider__bar {
+  border-radius: 0;
+  background-color: var(--gg-brand);
+}
+
+.el-slider__button {
+  border-radius: 0;
+  border: 2px solid var(--gg-brand);
+  background: var(--gg-surface);
+  width: 14px;
+  height: 14px;
+}
+
+.el-radio-button__inner,
+.el-checkbox__inner {
+  border-radius: 2px;
+  background: var(--gg-surface);
+}
+
+.el-radio-button:first-child .el-radio-button__inner,
+.el-radio-button:last-child .el-radio-button__inner {
+  border-radius: 2px;
+}
+
+.el-pagination {
+  --el-pagination-button-bg-color: var(--gg-surface);
+  font-family: var(--gg-font-mono);
+}
+
+.el-pagination .el-pager li,
+.el-pagination button {
+  border-radius: 2px;
+}
+
+.el-skeleton__item {
+  border-radius: 1px;
+}
+
+.el-empty__description p {
+  color: var(--gg-ink-3);
+}
+
+.el-drawer {
+  background: var(--gg-surface);
+}
+
+.el-dropdown-menu {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+}
+
+.el-select-dropdown {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+}
+
+.el-popper.is-light {
+  border-radius: 2px;
+  border: 1px solid var(--gg-border-strong);
+  background: var(--gg-surface);
+}
+
+.el-tooltip__popper.is-dark {
+  border-radius: 2px;
+  background: var(--gg-night);
+}
+
+.el-avatar {
+  border-radius: 2px;
+}
+
+.el-divider {
+  border-color: var(--gg-border);
+}
+
+.el-divider__text {
+  background: transparent;
+  color: var(--gg-ink-3);
+  font-family: var(--gg-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.el-result__title p {
+  font-family: var(--gg-font-display);
+  color: var(--gg-ink);
+}
+
+/* =========================================================
+   通用动效与工具类
+   ========================================================= */
+
+@keyframes gg-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gg-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gg-stamp-in {
+  0% {
+    opacity: 0;
+    transform: rotate(-3deg) scale(1.4);
+  }
+  70% {
+    opacity: 0.9;
+    transform: rotate(-3deg) scale(0.97);
+  }
+  100% {
+    opacity: 0.9;
+    transform: rotate(-3deg) scale(1);
+  }
+}
+
+@keyframes gg-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(176, 57, 44, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(176, 57, 44, 0);
+  }
+}
+
+@keyframes gg-blink {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes gg-shimmer {
+  0% {
+    background-position: -220% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+
+.gg-fade-up {
+  animation: gg-fade-up var(--gg-dur-slow) var(--gg-ease-out) both;
+}
+
+.gg-pop-in {
+  animation: gg-pop-in var(--gg-dur-slow) var(--gg-ease-out) both;
+}
+
+.gg-pulse {
+  animation: gg-pulse 2s var(--gg-ease) infinite;
+}
+
+/* 票据抬升（机械位移，不用放大） */
+.gg-lift {
+  transition: transform var(--gg-dur) var(--gg-ease), box-shadow var(--gg-dur) var(--gg-ease),
+    border-color var(--gg-dur) var(--gg-ease);
+}
+
+.gg-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--gg-shadow-2);
+  border-color: var(--gg-ink-4);
+}
+
+/* 骨架微光：纸张泛白 */
+.gg-shimmer {
+  background: linear-gradient(90deg, var(--gg-surface-2) 25%, #fdf9ee 37%, var(--gg-surface-2) 63%);
+  background-size: 220% 100%;
+  animation: gg-shimmer 1.4s linear infinite;
+}
+
+/* 无动画偏好降级 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

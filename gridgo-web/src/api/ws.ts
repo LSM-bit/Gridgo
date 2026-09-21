@@ -1,9 +1,12 @@
 /**
  * WebSocket 客户端封装
- * 支持：自动重连、心跳、消息分发、room_id 绑定、Token 自动刷新
+ * 支持：自动重连、心跳、消息分发、room_id 绑定、Token 自动刷新、关闭码语义化
  */
 
 import { useUserStore } from '@/stores/user'
+import { describeCloseCode } from '@/utils/ws'
+import type { CloseCodeInfo } from '@/utils/ws'
+import type { ChatMessagePayload, TradeOfferPayload } from '@/types/game'
 
 interface WSMessage {
   type: string
@@ -13,40 +16,47 @@ interface WSMessage {
 }
 
 type MessageHandler = (data: unknown) => void
+type CloseHandler = (info: CloseCodeInfo) => void
+
+/** 这些关闭码表示服务端已拒绝本次对局上下文，重连无意义 */
+const FATAL_CLOSE_CODES = new Set([4002, 4003, 4004, 4005])
 
 class GameWebSocket {
   private ws: WebSocket | null = null
   private roomId = ''
   private seq = 0
   private handlers = new Map<string, MessageHandler[]>()
+  private closeHandlers: CloseHandler[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private maxReconnectAttempts = 5
   private reconnectAttempts = 0
   private reconnectDelay = 3000
   private _isConnected = false
+  private _lastCloseCode = 0
 
   get isConnected() {
     return this._isConnected
   }
 
+  get lastCloseCode() {
+    return this._lastCloseCode
+  }
+
   /**
    * 连接到游戏 WebSocket
-   * @param token JWT access token（初始 token，重连时会自动从 store 获取最新值）
-   * @param roomId 房间 ID，连接成功后发送初始化消息
+   * @param token JWT access token（仅作签名占位，实际总是从 store 动态读取最新值）
+   * @param roomId 房间 ID，连接成功后发送首帧初始化消息
    */
   connect(_token: string, roomId: string) {
-    // 如果已有连接，先断开
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
-      console.log(`[WS] Closing existing connection (state=${this.ws.readyState}) before reconnect`)
       this.stopHeartbeat()
-      this.reconnectAttempts = this.maxReconnectAttempts // 阻止旧连接的自动重连
+      this.reconnectAttempts = this.maxReconnectAttempts
       this.ws.close(1000, 'reconnect')
       this.ws = null
       this._isConnected = false
     }
-    this.reconnectAttempts = 0 // 重置重连计数
-
+    this.reconnectAttempts = 0
     this.roomId = roomId
     this.doConnect()
   }
@@ -58,55 +68,30 @@ class GameWebSocket {
   }
 
   /** 构建 WebSocket URL（始终使用最新 token） */
-  private buildWsUrl(): string {
-    const token = this.getCurrentToken()
+  private buildWsUrl(token: string): string {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${protocol}//${window.location.host}/ws/game?token=${token}`
   }
 
   private doConnect() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('[WS] Already connected, skip')
-      return
-    }
+    if (this.ws?.readyState === WebSocket.OPEN) return
 
-    // 每次连接都使用最新的 token
     const token = this.getCurrentToken()
     if (!token) {
-      console.error('[WS] No token available, cannot connect')
+      this.emitClose(4001)
       return
     }
 
-    const url = this.buildWsUrl()
-    console.log(`[WS] ====== CONNECT START ======`)
-    console.log(`[WS] URL: ${url.substring(0, url.indexOf('token='))}token=...`)
-    console.log(`[WS] roomId: ${this.roomId}`)
-    console.log(`[WS] token (first 30): ${token.substring(0, 30)}...`)
-
-    this.ws = new WebSocket(url)
+    this.ws = new WebSocket(this.buildWsUrl(token))
 
     this.ws.onopen = () => {
-      console.log('[WS] ✅ Connected to game websocket')
-      console.log(`[WS] Sending init: room_id=${this.roomId}`)
       this._isConnected = true
       this.reconnectAttempts = 0
-
-      // 发送初始化消息 — 后端期望的格式是 { "room_id": "xxx" }
-      // 注意：不能用 this.send() 因为它会包装成 { type, data, seq, timestamp }
-      // 后端 game_ws.py 在 accept() 后直接 receive_json() 取 room_id
+      // 首帧握手：后端在 accept() 后直接 receive_json() 取 room_id（docs/PROJECT.md 7.2）
       if (this.ws?.readyState === WebSocket.OPEN) {
-        const initMsg = JSON.stringify({ room_id: this.roomId })
-        console.log(`[WS] Sending init message: ${initMsg}`)
-        this.ws.send(initMsg)
-        console.log(`[WS] Init message sent`)
-      } else {
-        console.error(`[WS] Cannot send init: readyState=${this.ws?.readyState}`)
+        this.ws.send(JSON.stringify({ room_id: this.roomId }))
       }
-
-      // 延迟启动心跳，等 init 消息被后端处理后再发 ping
-      setTimeout(() => {
-        this.startHeartbeat()
-      }, 2000)
+      setTimeout(() => this.startHeartbeat(), 2000)
     }
 
     this.ws.onmessage = (event) => {
@@ -114,33 +99,28 @@ class GameWebSocket {
         const msg: WSMessage = JSON.parse(event.data)
         this.dispatch(msg.type, msg.data)
       } catch (e) {
-        console.error('[WS] Parse message error:', e)
+        console.error('[WS] 消息解析失败:', e)
       }
     }
 
     this.ws.onclose = (event) => {
-      console.log(`[WS] Disconnected (code=${event.code}, reason=${event.reason})`)
       this._isConnected = false
+      this._lastCloseCode = event.code
       this.stopHeartbeat()
-      // 注意：不清理 handlers，重连后仍然有效
+      this.emitClose(event.code)
 
-      // 认证失败（4001）不重连，需要重新登录
       if (event.code === 4001) {
-        console.warn('[WS] Authentication failed, redirecting to login')
         const userStore = useUserStore()
         userStore.clearUserInfo()
         window.location.href = '/login'
         return
       }
-
-      // 非正常关闭时尝试重连
-      if (event.code !== 1000) {
-        this.tryReconnect()
-      }
+      if (FATAL_CLOSE_CODES.has(event.code)) return
+      if (event.code !== 1000) this.tryReconnect()
     }
 
-    this.ws.onerror = (error) => {
-      console.error('[WS] ❌ Connection error:', error)
+    this.ws.onerror = () => {
+      this._isConnected = false
     }
   }
 
@@ -150,64 +130,88 @@ class GameWebSocket {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-    this.reconnectAttempts = this.maxReconnectAttempts // 阻止重连
+    this.reconnectAttempts = this.maxReconnectAttempts
     this.ws?.close(1000, 'user disconnect')
     this.ws = null
     this._isConnected = false
-    // 注意：不再清理 handlers，让重连或重新挂载后仍然有效
   }
 
   /**
    * 发送游戏操作消息
    * 格式: { type: string, data: unknown, seq: number, timestamp: number }
    */
-  send(type: string, data: unknown = {}) {
+  send(type: string, data: unknown = {}): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      console.warn('[WS] Not connected, cannot send:', type)
-      return
+      console.warn('[WS] 未连接，消息未发送:', type)
+      return false
     }
-
-    const msg: WSMessage = {
-      type,
-      data,
-      seq: ++this.seq,
-      timestamp: Date.now(),
-    }
-
+    const msg: WSMessage = { type, data, seq: ++this.seq, timestamp: Date.now() }
     this.ws.send(JSON.stringify(msg))
+    return true
+  }
+
+  // ─── 新增能力封装（与后端 game_ws.py 对齐） ───
+
+  /** 聊天（chat.send，载荷字段以 content 为准） */
+  sendChat(content: string): boolean {
+    return this.send('chat.send', { content })
+  }
+
+  /** 发起交易（game.trade_offer） */
+  sendTradeOffer(payload: TradeOfferPayload): boolean {
+    return this.send('game.trade_offer', payload)
+  }
+
+  /** 接受交易（game.trade_accept） */
+  sendTradeAccept(tradeId: string): boolean {
+    return this.send('game.trade_accept', { trade_id: tradeId })
+  }
+
+  /** 拒绝/撤回交易（game.trade_reject） */
+  sendTradeReject(tradeId: string): boolean {
+    return this.send('game.trade_reject', { trade_id: tradeId })
   }
 
   on(type: string, handler: MessageHandler) {
-    if (!this.handlers.has(type)) {
-      this.handlers.set(type, [])
-    }
+    if (!this.handlers.has(type)) this.handlers.set(type, [])
     this.handlers.get(type)!.push(handler)
+    return () => this.off(type, handler)
   }
 
   off(type: string, handler: MessageHandler) {
     const handlers = this.handlers.get(type)
-    if (handlers) {
-      const idx = handlers.indexOf(handler)
-      if (idx > -1) handlers.splice(idx, 1)
+    if (!handlers) return
+    const idx = handlers.indexOf(handler)
+    if (idx > -1) handlers.splice(idx, 1)
+  }
+
+  onClose(handler: CloseHandler) {
+    this.closeHandlers.push(handler)
+    return () => {
+      const idx = this.closeHandlers.indexOf(handler)
+      if (idx > -1) this.closeHandlers.splice(idx, 1)
     }
+  }
+
+  /** 清空全部监听（页面卸载时调用） */
+  clearHandlers() {
+    this.handlers.clear()
+    this.closeHandlers = []
+  }
+
+  private emitClose(code: number) {
+    const info = describeCloseCode(code)
+    this.closeHandlers.forEach((h) => h(info))
   }
 
   private dispatch(type: string, data: unknown) {
-    const handlers = this.handlers.get(type)
-    if (handlers) {
-      handlers.forEach((h) => h(data))
-    }
-    // 通配符处理
-    const wildcardHandlers = this.handlers.get('*')
-    if (wildcardHandlers) {
-      wildcardHandlers.forEach((h) => h({ type, data }))
-    }
+    this.handlers.get(type)?.forEach((h) => h(data))
+    this.handlers.get('*')?.forEach((h) => h({ type, data }))
   }
 
   private startHeartbeat() {
-    this.heartbeatTimer = setInterval(() => {
-      this.send('system.ping')
-    }, 30000)
+    this.stopHeartbeat()
+    this.heartbeatTimer = setInterval(() => this.send('system.ping'), 30000)
   }
 
   private stopHeartbeat() {
@@ -219,27 +223,20 @@ class GameWebSocket {
 
   private tryReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.warn('[WS] Max reconnect attempts reached')
+      console.warn('[WS] 已达最大重连次数')
       return
     }
-
-    // 重连前检查 token 是否还有效
-    const token = this.getCurrentToken()
-    if (!token) {
-      console.warn('[WS] No token available, cannot reconnect')
+    if (!this.getCurrentToken()) {
       const userStore = useUserStore()
       userStore.clearUserInfo()
       window.location.href = '/login'
       return
     }
-
-    this.reconnectAttempts++
-    console.log(`[WS] Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`)
-
-    this.reconnectTimer = setTimeout(() => {
-      this.doConnect()
-    }, this.reconnectDelay)
+    this.reconnectAttempts += 1
+    this.reconnectTimer = setTimeout(() => this.doConnect(), this.reconnectDelay)
   }
 }
 
 export const gameWS = new GameWebSocket()
+
+export type { CloseCodeInfo, ChatMessagePayload }
