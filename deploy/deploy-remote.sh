@@ -16,7 +16,11 @@ set -e
 PROJECT_DIR="/home/deploy/GridGo"
 REPO_URL="https://github.com/LSM-bit/Gridgo.git"
 BRANCH="main"
-OJ_ENV_FILE="/home/deploy/OJ/deploy/api.env"   # 仅用于探测 OJ 的 PG 超级用户名（只读 user 字段）
+# 仅用于探测 OJ 的 PG 超级用户名（只读 POSTGRES_USER 字段）；兼容大小写目录名
+OJ_ENV_FILE=""
+for f in /home/deploy/oj/deploy/api.env /home/deploy/OJ/deploy/api.env; do
+  if [ -f "$f" ]; then OJ_ENV_FILE="$f"; break; fi
+done
 
 echo "========== GridGo 部署开始 =========="
 
