@@ -74,8 +74,19 @@ const resize = () => {
   instance.render()
 }
 
+/**
+ * 点击命中优先级：棋子（玩家）> 地块。
+ * 用户点击棋子时想看的是"这个玩家"，而不是棋子所在格子的地块信息。
+ */
 const handleClick = (event: MouseEvent) => {
-  const position = renderer.value?.tileAt(event.clientX, event.clientY)
+  const instance = renderer.value
+  if (!instance) return
+  const userId = instance.playerAt(event.clientX, event.clientY)
+  if (userId !== null) {
+    emit('select-player', userId)
+    return
+  }
+  const position = instance.tileAt(event.clientX, event.clientY)
   if (position !== null && position !== undefined) emit('select', position)
 }
 
@@ -120,6 +131,8 @@ defineExpose({
   resize,
   /** 命中测试：客户端坐标 → 地块 position */
   tileAt: (x: number, y: number) => renderer.value?.tileAt(x, y) ?? null,
+  /** 命中测试：客户端坐标 → 玩家 user_id */
+  playerAt: (x: number, y: number) => renderer.value?.playerAt(x, y) ?? null,
   /** 动画期间覆盖棋子坐标（useAnimation 调用） */
   setTokenOverrides: (overrides: Map<number, { x: number; y: number }>) => {
     renderer.value?.setOptions({ tokenOverrides: overrides })

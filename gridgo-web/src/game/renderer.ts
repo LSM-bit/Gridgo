@@ -93,6 +93,33 @@ export class BoardRenderer {
     return hit ? hit.position : null
   }
 
+  /**
+   * 命中测试（客户端坐标 → 玩家 user_id）
+   *
+   * 与 tileAt 使用同一套坐标换算；棋子可能被动画临时挪动（tokenOverrides），
+   * 因此判定位置以动画中的实际绘制位置为准，并取最近的一个，避免多棋子同格时误判。
+   */
+  playerAt(clientX: number, clientY: number): number | null {
+    const rect = this.canvas.getBoundingClientRect()
+    if (!rect.width) return null
+    const scale = this.size / rect.width
+    const x = (clientX - rect.left) * scale
+    const y = (clientY - rect.top) * scale
+
+    let hitUserId: number | null = null
+    let hitDistance = Number.POSITIVE_INFINITY
+    this.tokens.forEach((token) => {
+      const point = this.opts.tokenOverrides?.get(token.user_id) ?? token.snapshot()
+      const distance = Math.hypot(x - point.x, y - point.y)
+      // 判定半径略大于绘制半径，便于点击到棋子边缘
+      if (distance <= token.radius * 1.6 && distance < hitDistance) {
+        hitUserId = token.user_id
+        hitDistance = distance
+      }
+    })
+    return hitUserId
+  }
+
   private ownerColor(userId: number): string {
     const index = this.state?.players.findIndex((p) => p.user_id === userId) ?? -1
     return DEFAULT_GROUP_COLORS[(index < 0 ? 0 : index) % DEFAULT_GROUP_COLORS.length]

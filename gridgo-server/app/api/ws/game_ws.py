@@ -112,20 +112,22 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
     })
     app_logger.info("WS 快照已发送: room_id=%s, user_id=%s, spectator=%s", room_id, user_id, is_spectator)
 
-    # 重连时恢复后台任务（AI 回合、超时计时器等）
-    # asyncio.Task 不会随 Redis 持久化，所以每次 WS 重连时都需要检查
-    try:
-        await GameService.resume_active_tasks(room_id)
-    except Exception as e:
-        app_logger.warning("WS 重连恢复任务失败: room_id=%s, error=%s", room_id, e)
-
-    # 断线重连：复位玩家连接标记；若此前被判离线则广播 system.player_reconnected
+    # 断线重连：先复位玩家连接标记（解除离线状态与 AI 代打），再恢复后台任务。
+    # 顺序很关键：若先 resume，重连玩家在引擎中仍被判为「离线 / AI 代打」，
+    # 会误启动 AI 任务与自己抢操作，导致该玩家的回合被 AI 抢走或卡住（问题④）。
     # （docs/GAME_FLOW.md 9：≤30s → resume_incremental；30s~3min → resume_snapshot；>3min → left_game）
     if not is_spectator:
         try:
             await GameService.handle_player_connected(room_id, user_id)
         except Exception as e:
             app_logger.warning("WS 重连处理失败: room_id=%s, user_id=%s, error=%s", room_id, user_id, e)
+
+    # 重连时恢复后台任务（AI 回合、超时计时器等）
+    # asyncio.Task 不会随 Redis 持久化，所以每次 WS 重连时都需要检查
+    try:
+        await GameService.resume_active_tasks(room_id)
+    except Exception as e:
+        app_logger.warning("WS 重连恢复任务失败: room_id=%s, error=%s", room_id, e)
 
     # 广播连接通知
     if is_spectator:
@@ -149,7 +151,19 @@ async def game_websocket(websocket: WebSocket, token: str = Query(...)):
                 room_id, user_id, msg_type, _truncate(str(msg_data)),
             )
 
-            await _handle_message(room_id, user_id, msg_type, msg_data, is_spectator=is_spectator)
+            try:
+                await _handle_message(room_id, user_id, msg_type, msg_data, is_spectator=is_spectator)
+            except ValueError as e:
+                # 非法操作（不满足回合/资金/规则约束）只回一条 system.error，
+                # 不能中断连接，否则前端只能看到「WS 已断开」而无任何原因提示
+                app_logger.warning(
+                    "WS 操作被拒绝: room=%s user=%s type=%s error=%s", room_id, user_id, msg_type, e
+                )
+                await ws_manager.send_to_player(room_id, user_id, "system.error", {
+                    "code": 40006,
+                    "message": str(e),
+                    "action": msg_type,
+                })
 
     except WebSocketDisconnect:
         app_logger.info("WS 断开: room_id=%s, user_id=%s", room_id, user_id)
@@ -191,6 +205,7 @@ SPECTATOR_BLOCKED_TYPES = {
     "game.mortgage",
     "game.redeem",
     "game.end_turn",
+    "game.quit_game",
     "game.jail_pay_bail",
     "game.jail_use_card",
     "game.trade_offer",
@@ -282,6 +297,21 @@ async def _handle_message(room_id: str, user_id: int, msg_type: str, data: dict,
 
     elif msg_type == "game.end_turn":
         await GameService.handle_end_turn(room_id, user_id)
+
+    elif msg_type == "game.quit_game":
+        # 强制退出本局：该玩家由 AI 接管继续对局；房间内无真人时解散房间
+        result = await GameService.handle_quit_game(room_id, user_id)
+        ws = ws_manager.get_connection(room_id, user_id)
+        if ws and not result.get("dissolved"):
+            await ws.send_json({
+                "type": "game.quit_result",
+                "data": {
+                    "ok": bool(result.get("ok")),
+                    "reason": result.get("reason"),
+                    "ai_difficulty": result.get("ai_difficulty"),
+                },
+                "timestamp": int(time.time() * 1000),
+            })
 
     elif msg_type == "game.jail_pay_bail":
         await GameService.handle_jail_pay_bail(room_id, user_id)

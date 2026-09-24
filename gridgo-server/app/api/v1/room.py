@@ -103,7 +103,7 @@ async def join_room(
 
 @router.post("/{room_id}/leave")
 async def leave_room(room_id: str, current_user: User = Depends(get_current_user)):
-    """离开房间（房主离开会销毁房间）"""
+    """离开房间（房主离开时转交房主给其他真人玩家；房内已无真人玩家时销毁房间）"""
     try:
         result = await RoomService.leave_room(room_id, current_user.id)
         return {"code": 0, **result}

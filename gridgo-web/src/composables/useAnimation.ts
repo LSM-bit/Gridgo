@@ -22,12 +22,19 @@ export function useAnimation() {
     renderer = target
   }
 
-  const track = (timeline: Timeline) => {
+  /**
+   * 纳入统一调度：动画结束时出栈并回收 isAnimating。
+   *
+   * 注意 onComplete 只能有一个回调，GSAP 后注册会覆盖先注册，
+   * 所以额外的收尾逻辑必须走这里的 onDone 参数，不能在 track 之后再次 eventCallback('onComplete')。
+   */
+  const track = (timeline: Timeline, onDone?: () => void) => {
     activeTimelines.push(timeline)
     timeline.eventCallback('onComplete', () => {
       const idx = activeTimelines.indexOf(timeline)
       if (idx > -1) activeTimelines.splice(idx, 1)
       if (activeTimelines.length === 0) isAnimating.value = false
+      onDone?.()
     })
     return timeline
   }
@@ -63,13 +70,34 @@ export function useAnimation() {
       },
       0.12,
     )
-    track(timeline)
-    timeline.eventCallback('onComplete', () => {
+    track(timeline, () => {
       renderer?.setOptions({ tokenOverrides: new Map() })
       redraw()
       onDone?.()
     })
     return timeline
+  }
+
+  /**
+   * 按棋盘格号走位：由渲染器锚点生成逐格 waypoints。
+   * 后端 game.player_moved 只给 from / steps，这里换算成逐格路径（支持绕回起点）。
+   */
+  const playTokenMoveByPositions = (playerId: number, from: number, steps: number, onDone?: () => void) => {
+    if (!renderer) return null
+    const anchors = renderer.anchors()
+    const total = anchors.size
+    if (!total) return null
+
+    const waypoints: TokenPoint[] = []
+    for (let i = 0; i < steps; i += 1) {
+      const point = anchors.get((from + i) % total)
+      if (point) waypoints.push(point)
+    }
+    const last = anchors.get((from + steps) % total)
+    if (last) waypoints.push(last)
+
+    if (waypoints.length < 2) return null
+    return playTokenMove(playerId, waypoints, onDone)
   }
 
   /** 卡片翻出动效 */
@@ -91,6 +119,7 @@ export function useAnimation() {
     redraw,
     playDice,
     playTokenMove,
+    playTokenMoveByPositions,
     playCardReveal,
     playMoneyFloat,
     killAll,

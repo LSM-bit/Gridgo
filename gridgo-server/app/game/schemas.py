@@ -117,6 +117,7 @@ class AuctionState(BaseModel):
     current_bidder_id: int | None = None
     bidders: list[int] = Field(default_factory=list)  # 参与者 user_id 列表
     countdown: int = 15  # 倒计时秒数
+    bid_rounds: int = 0  # 本场拍卖累计出价轮次（达到上限立即定槌）
 
 
 class TradeOffer(BaseModel):

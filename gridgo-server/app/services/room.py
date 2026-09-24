@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.redis import get_redis
 from app.core.security import get_password_hash, verify_password
 from app.game.ai import AIPlayerFactory
+from app.models.map import Map
 from app.models.room import Room, RoomPlayerRow
 from app.models.user import User
 from app.schemas.room import RoomInfo, RoomListItem, RoomPlayer, SpectatorInfo
@@ -44,6 +45,19 @@ def _generate_room_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+async def _ensure_map_available(db: AsyncSession | None, map_id: str) -> None:
+    """校验地图存在且已启用（失败快，避免房间进入不可用状态）
+
+    地图数据缺失时必须在这里就拒绝，而不是等到开局/WS 初始化才报错，
+    否则房间会被置为 playing 却永远无法开局。
+    """
+    if db is None:
+        return
+    result = await db.execute(select(Map).where(Map.id == map_id, Map.is_active.is_(True)))
+    if result.scalars().first() is None:
+        raise ValueError(f"地图不存在或未启用: {map_id}")
+
+
 def _user_room_key(user_id: int) -> str:
     """用户 → 当前活跃房间 ID 的索引 Key
 
@@ -51,6 +65,20 @@ def _user_room_key(user_id: int) -> str:
     创建/加入房间时写入，离开/房间销毁时删除。
     """
     return f"user:room:{user_id}"
+
+
+async def _is_room_in_game(room_id: str) -> bool:
+    """房间当前是否处于对局进行中
+
+    以 Redis 中的对局状态（`game:{room_id}`）为权威：对局结束后会被清理，
+    因此存在即代表对局仍在进行。
+    """
+    try:
+        redis = await get_redis()
+        return bool(await redis.exists(f"game:{room_id}"))
+    except Exception as e:  # Redis 异常时不阻断离开流程
+        logger.warning(f"对局状态检查失败: room={room_id} error={e}")
+        return False
 
 
 def _is_room_member(room: RoomInfo, user_id: int) -> bool:
@@ -103,6 +131,9 @@ class RoomService:
         # 校验 ai_count 不超过 max_players
         if ai_count > max_players:
             raise ValueError("AI 数量不能超过最大玩家数")
+
+        # 校验地图可用（不存在的地图不允许建房，避免开局时才发现）
+        await _ensure_map_available(db, map_id)
 
         # 当 ai_count == max_players 时，所有玩家位都被 AI 占满，房主自动成为观战者
         host_as_spectator = ai_count >= max_players
@@ -436,10 +467,49 @@ class RoomService:
         if not is_player and not is_spectator:
             raise ValueError("你不在该房间中")
 
-        # 房主离开 → 销毁房间（无论房主是玩家还是观战者）
+        # 对局进行中的玩家离开：先交由 AI 托管，避免留下无人操作的卡死回合（问题③）；
+        # 若该次托管使得「房间内已无真人玩家」，引擎侧会直接解散房间。
+        if is_player and await _is_room_in_game(room_id):
+            from app.services.game import GameService
+
+            try:
+                quit_result = await GameService.handle_quit_game(room_id, user_id)
+            except Exception as e:
+                logger.warning(f"离开房间时 AI 托管失败: room={room_id} user={user_id} error={e}")
+                quit_result = {}
+            if quit_result.get("dissolved"):
+                return {"destroyed": True, "message": "房间内已无真人玩家，房间已解散"}
+            room = await RoomService._get_room(room_id) or room
+
+        # 房主离开 → 优先把房主转交给房间内其他真人玩家；
+        # 仅当房间内已无真人玩家时才解散房间（问题②：此前为「房主离开即解散」，
+        # 会把房内仍在的其他真人玩家一并踢出）。
         if room.host_id == user_id:
-            await RoomService._delete_room(room)
-            return {"destroyed": True, "message": "房主离开，房间已销毁"}
+            successor = next(
+                (p for p in room.players if p.user_id != user_id and not p.is_ai),
+                None,
+            )
+            if successor is None:
+                await RoomService.dissolve_room(room_id, reason="host_left")
+                return {"destroyed": True, "message": "房主离开，房间内已无真人玩家，房间已解散"}
+
+            # 房主转交：更新 host_id 与 is_host 标记（房主离开者随后按普通成员逻辑移除）
+            room.host_id = successor.user_id
+            for p in room.players:
+                p.is_host = p.user_id == successor.user_id
+            await RoomService._save_room(room)
+            logger.info(
+                f"房主离开，已转交房主: room={room_id} old_host={user_id} new_host={successor.user_id}"
+            )
+            try:
+                from app.game.events import manager as ws_manager
+
+                await ws_manager.broadcast(room_id, "room.host_changed", {
+                    "host_id": successor.user_id,
+                    "host_nickname": successor.nickname,
+                })
+            except Exception as e:
+                logger.warning(f"广播房主变更失败: room={room_id} error={e}")
 
         # 观战者离开 → 直接移除
         if is_spectator:
@@ -598,20 +668,77 @@ class RoomService:
         if not all_ready:
             raise ValueError("还有玩家未准备")
 
-        # 更新状态
-        room.status = "playing"
-        await RoomService._save_room(room)
+        # 状态更新前先校验地图可用，避免「先置 playing 再失败」的脏状态
+        await _ensure_map_available(db, room.map_id)
 
-        # 从等待列表移除
         redis = await get_redis()
-        await redis.srem("room:list", room_id)
 
-        # 初始化游戏引擎（GameState 会存入 Redis，首回合会自动开始）
-        if db is not None:
-            from app.services.game import GameService
-            await GameService.init_game(db, room_id)
+        # 进入 playing 的镜像落库与引擎初始化纳入同一个数据库事务：
+        # 只有 init_game 成功才提交，失败即整体回滚，
+        # PostgreSQL 侧不会留下 status=1（playing）的残留行。
+        room.status = "playing"
+        try:
+            from app.core.database import async_session
+
+            async with async_session() as tx:
+                # 先把运行时状态置为 playing（init_game 依赖 room.status == "playing"），
+                # 镜像写入复用本事务，未提交前对其它请求不可见
+                await RoomService._save_room(room, db=tx)
+
+                # 移出等待列表。Redis 与 PostgreSQL 无法共用一个事务，
+                # 这一步的补偿由 _rollback_start 负责
+                await redis.srem("room:list", room_id)
+
+                # 初始化游戏引擎（GameState 存入 Redis，首回合自动开始）
+                # 任何情况下都必须真正完成 init_game，否则本事务会把房间提交成
+                # playing 却没有对局状态（即 D2 缺陷形态）
+                if db is not None:
+                    from app.services.game import GameService
+
+                    await GameService.init_game(db, room_id)
+                else:
+                    from app.services.game import GameService
+
+                    async with async_session() as engine_db:
+                        await GameService.init_game(engine_db, room_id)
+
+                # 引擎初始化成功，才提交房间状态变更
+                await tx.commit()
+        except Exception as exc:
+            # 失败必须整体回滚：否则房间卡在 playing，既不能重开也无法修改设置
+            await RoomService._rollback_start(room, redis)
+            logger.error(f"开局失败已回滚: room={room_id} map={room.map_id} error={exc}")
+            raise ValueError(f"开局失败：{exc}") from exc
 
         return room_id
+
+    @staticmethod
+    async def _rollback_start(room: RoomInfo, redis=None) -> None:
+        """回滚开局失败产生的中间状态
+
+        - 房间状态退回 waiting，并恢复到等待列表
+        - 清理初始化过程可能残留的引擎实例与 game:* Redis 缓存
+        """
+        room.status = "waiting"
+        try:
+            await RoomService._save_room(room)
+        except Exception as e:  # 回滚自身失败不能吞掉原始异常
+            logger.error(f"回滚房间状态失败: room={room.id} error={e}")
+
+        try:
+            if redis is None:
+                redis = await get_redis()
+            await redis.sadd("room:list", room.id)
+            await redis.delete(f"game:{room.id}", f"game:{room.id}:cards")
+        except Exception as e:
+            logger.error(f"回滚等待列表失败: room={room.id} error={e}")
+
+        try:
+            from app.game.engine import remove_engine
+
+            remove_engine(room.id)
+        except Exception as e:
+            logger.warning(f"释放游戏引擎失败: room={room.id} error={e}")
 
     @staticmethod
     async def get_room(room_id: str) -> RoomInfo:
@@ -696,8 +823,15 @@ class RoomService:
             raise ValueError("房间不存在")
         if room.host_id != host_id:
             raise ValueError("只有房主才能重置房间")
-        if room.status != "finished":
+        if room.status not in ("finished", "playing"):
             raise ValueError("只有已结束的房间才能重置")
+
+        # playing 但游戏状态已不存在 = 开局失败/对局丢失的残留房间，允许重置救回
+        if room.status == "playing":
+            redis = await get_redis()
+            if await redis.exists(f"game:{room.id}"):
+                raise ValueError("对局正在进行，无法重置房间")
+            logger.warning(f"检测到残留房间并重置: room={room.id} status=playing 无对局状态")
 
         # 重置状态
         room.status = "waiting"
@@ -751,8 +885,13 @@ class RoomService:
         return RoomInfo.model_validate_json(data)
 
     @staticmethod
-    async def _save_room(room: RoomInfo) -> None:
-        """保存房间到 Redis（并写穿透到 PostgreSQL 镜像）"""
+    async def _save_room(room: RoomInfo, db: AsyncSession | None = None) -> None:
+        """保存房间到 Redis（并写穿透到 PostgreSQL 镜像）
+
+        db 传入时：镜像写入复用调用方事务（由调用方 commit / rollback），
+        用于 start_game「房间状态变更与对局初始化同一事务」的场景；
+        其余调用点不传 db，保持「自建会话 + 立即提交」的原行为。
+        """
         redis = await get_redis()
         room_key = f"room:{room.id}"
         await redis.set(room_key, room.model_dump_json(), ex=ROOM_TTL)
@@ -761,7 +900,7 @@ class RoomService:
         # 刷新密码 Key 的 TTL（存在时）
         await redis.expire(f"room:pwd:{room.id}", ROOM_TTL)
         # 写穿透到 rooms / room_players
-        await RoomService._persist_room(room)
+        await RoomService._persist_room(room, db=db)
 
     @staticmethod
     async def _delete_room(room: RoomInfo) -> None:
@@ -782,6 +921,35 @@ class RoomService:
 
         # 写穿透：房间销毁 → rooms.status = 2（已结束），保留历史不做物理删除
         await RoomService._mark_room_ended(room)
+
+    # ─── 房间解散（房间内已无真人玩家）───
+
+    @staticmethod
+    async def dissolve_room(room_id: str, reason: str = "no_human_player") -> bool:
+        """解散房间
+
+        用于「房间内已无真人玩家」等系统场景：清理 Redis 房间数据、房间码、
+        密码、等待列表与成员活跃索引，写穿透 rooms.status = 2（保留历史），
+        并广播 room.dissolved 通知在线客户端退出房间。
+        """
+        room = await RoomService._get_room(room_id)
+        if not room:
+            return False
+
+        await RoomService._delete_room(room)
+
+        from app.game.events import manager as ws_manager
+
+        try:
+            await ws_manager.broadcast(room_id, "room.dissolved", {
+                "room_id": room_id,
+                "reason": reason,
+            })
+        except Exception as e:  # 广播失败不影响解散结果
+            logger.warning(f"房间解散广播失败: room={room_id} error={e}")
+
+        logger.info(f"房间已解散: room={room_id} reason={reason}")
+        return True
 
     # ─── 活跃房间索引（同一用户同时只能有一个活跃房间）───
 
@@ -924,74 +1092,92 @@ class RoomService:
         room: RoomInfo,
         password_hash: str | None = None,
         clear_password: bool = False,
+        db: AsyncSession | None = None,
     ) -> None:
         """把房间运行时状态镜像写入 rooms / room_players（docs/PROJECT.md 6.2）
 
-        - 运行时以 Redis 为准，本方法只做镜像，异常仅记录日志，不影响主流程
+        - 运行时以 Redis 为准，本方法只做镜像
         - room_players 采用「先删后插」保证镜像与运行时一致
         - password_hash：传入时同步 rooms.password_hash（房间密码持久化镜像）；
           clear_password=True 表示清除密码（写 NULL）
+        - db 传入时：复用调用方事务，只写入不提交（由调用方 commit / rollback），
+          异常向上抛出，供 start_game 做「开局事务包裹」
+        - 未传 db 时：自建会话 + 立即提交，异常仅记录日志，不影响主流程
         """
+        if db is not None:
+            await RoomService._apply_room_row(db, room, password_hash, clear_password)
+            return
+
         try:
             from app.core.database import async_session
         except Exception as e:  # pragma: no cover
             logger.warning("[RoomService] database unavailable: %s", e)
             return
 
-        status_code = {"waiting": 0, "playing": 1, "finished": 2}.get(room.status, 0)
         try:
-            async with async_session() as db:
-                row = await db.get(Room, room.id)
-                if row is None:
-                    row = Room(id=room.id, room_code=room.code)
-                    db.add(row)
-
-                row.room_code = room.code
-                row.name = room.name
-                row.host_id = room.host_id
-                row.max_players = room.max_players
-                row.map_id = room.map_id
-                row.ai_count = room.ai_count
-                row.ai_difficulty = room.ai_difficulty
-                row.status = status_code
-                row.config = room.model_dump(mode="json")
-
-                # 房间密码哈希镜像（Redis 为主，PostgreSQL 为持久化副本）
-                if password_hash is not None:
-                    row.password_hash = password_hash
-                elif clear_password:
-                    row.password_hash = None
-
-                await db.execute(delete(RoomPlayerRow).where(RoomPlayerRow.room_id == room.id))
-                for p in room.players:
-                    db.add(
-                        RoomPlayerRow(
-                            room_id=room.id,
-                            user_id=p.user_id,
-                            nickname=p.nickname,
-                            is_host=p.is_host,
-                            is_ready=p.is_ready,
-                            is_ai=p.is_ai,
-                            ai_difficulty=p.ai_difficulty,
-                            is_spectator=False,
-                        )
-                    )
-                for s in room.spectators:
-                    db.add(
-                        RoomPlayerRow(
-                            room_id=room.id,
-                            user_id=s.user_id,
-                            nickname=s.nickname,
-                            is_host=s.is_host,
-                            is_ready=False,
-                            is_ai=False,
-                            ai_difficulty=None,
-                            is_spectator=True,
-                        )
-                    )
-                await db.commit()
+            async with async_session() as own_db:
+                await RoomService._apply_room_row(own_db, room, password_hash, clear_password)
+                await own_db.commit()
         except Exception as e:
             logger.warning("[RoomService] persist room %s failed: %s", room.id, e)
+
+    @staticmethod
+    async def _apply_room_row(
+        db: AsyncSession,
+        room: RoomInfo,
+        password_hash: str | None = None,
+        clear_password: bool = False,
+    ) -> None:
+        """把房间状态与玩家列表写入 rooms / room_players（只写入，不提交事务）"""
+        status_code = {"waiting": 0, "playing": 1, "finished": 2}.get(room.status, 0)
+        row = await db.get(Room, room.id)
+        if row is None:
+            row = Room(id=room.id, room_code=room.code)
+            db.add(row)
+
+        row.room_code = room.code
+        row.name = room.name
+        row.host_id = room.host_id
+        row.max_players = room.max_players
+        row.map_id = room.map_id
+        row.ai_count = room.ai_count
+        row.ai_difficulty = room.ai_difficulty
+        row.status = status_code
+        row.config = room.model_dump(mode="json")
+
+        # 房间密码哈希镜像（Redis 为主，PostgreSQL 为持久化副本）
+        if password_hash is not None:
+            row.password_hash = password_hash
+        elif clear_password:
+            row.password_hash = None
+
+        await db.execute(delete(RoomPlayerRow).where(RoomPlayerRow.room_id == room.id))
+        for p in room.players:
+            db.add(
+                RoomPlayerRow(
+                    room_id=room.id,
+                    user_id=p.user_id,
+                    nickname=p.nickname,
+                    is_host=p.is_host,
+                    is_ready=p.is_ready,
+                    is_ai=p.is_ai,
+                    ai_difficulty=p.ai_difficulty,
+                    is_spectator=False,
+                )
+            )
+        for s in room.spectators:
+            db.add(
+                RoomPlayerRow(
+                    room_id=room.id,
+                    user_id=s.user_id,
+                    nickname=s.nickname,
+                    is_host=s.is_host,
+                    is_ready=False,
+                    is_ai=False,
+                    ai_difficulty=None,
+                    is_spectator=True,
+                )
+            )
 
     @staticmethod
     async def _mark_room_ended(room: RoomInfo) -> None:

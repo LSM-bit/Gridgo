@@ -183,6 +183,34 @@ class GameService:
         except Exception as e:
             app_logger.warning("断线标记失败: room=%s user=%s error=%s", room_id, player_id, e)
 
+    # ─── 强制退出本局（AI 接管 / 房间解散） ───
+
+    @staticmethod
+    async def handle_quit_game(room_id: str, player_id: int) -> dict:
+        """玩家强制退出本局对局
+
+        规则：
+        - 退出者本人立即交由 AI 接管，继续参与本局对局（不退出房间）
+        - 若房间内已无真人玩家，则自动解散房间并清理对局资源
+        """
+        engine = get_engine(room_id)
+        result = await engine.quit_game(player_id)
+        if not result.get("ok"):
+            return {"ok": False, "reason": result.get("reason"), "dissolved": False}
+
+        dissolved = False
+        if not result.get("human_player_ids"):
+            # 房间内已无真人玩家 → 解散房间
+            await GameService.cleanup_game(room_id)
+            dissolved = await RoomService.dissolve_room(room_id, reason="no_human_player")
+            app_logger.info("房间内已无真人玩家，自动解散: room_id=%s", room_id)
+
+        return {
+            "ok": True,
+            "dissolved": dissolved,
+            "ai_difficulty": result.get("ai_difficulty"),
+        }
+
     # ─── 聊天（docs/PROJECT.md 8.4：chat.send） ───
 
     @staticmethod

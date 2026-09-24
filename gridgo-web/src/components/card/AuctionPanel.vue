@@ -3,9 +3,17 @@
     <template #header>
       <div class="auction-panel__header">
         <span>拍卖 · {{ tileName }}</span>
-        <el-tag size="small" type="danger">倒计时 {{ auction.countdown }}s</el-tag>
+        <el-tag size="small" :type="timerTagType">倒计时 {{ secondsLeft }}s</el-tag>
       </div>
     </template>
+
+    <el-progress
+      class="auction-panel__timer"
+      :percentage="timerPercent"
+      :stroke-width="6"
+      :show-text="false"
+      :status="secondsLeft <= 5 ? 'exception' : undefined"
+    />
 
     <div class="auction-panel__row">
       <span>起拍价</span>
@@ -27,22 +35,32 @@
     </div>
 
     <div v-if="canBid" class="auction-panel__actions">
-      <el-input-number v-model="amount" :min="minAmount" :step="MIN_BID_INCREMENT" />
-      <el-button type="primary" :disabled="amount < minAmount" @click="bid">出价</el-button>
-      <el-button @click="amount = minAmount">最低价</el-button>
+      <el-input-number v-model="amount" :min="minAmount" :step="MIN_BID_INCREMENT" :disabled="settling || !connected" />
+      <el-button type="primary" :disabled="!canBidNow || amount < minAmount" @click="bid">出价</el-button>
+      <el-button :disabled="!connected" @click="amount = minAmount">最低价</el-button>
     </div>
-    <p v-else-if="isSpectator" class="auction-panel__hint">观战中，无法参与竞价</p>
-    <p v-else class="auction-panel__hint">等待其他玩家出价…</p>
+    <p v-else-if="isSpectator" class="auction-panel__hint">观战中，无法参与竞价 · 剩余 {{ secondsLeft }}s</p>
+    <p v-else class="auction-panel__hint">等待其他玩家出价 · 剩余 {{ secondsLeft }}s</p>
+    <p v-if="!connected" class="auction-panel__hint auction-panel__hint--offline">
+      连接已断开，出价已暂停，正在自动重连…
+    </p>
+    <p v-if="settling" class="auction-panel__hint auction-panel__hint--settling">
+      本轮倒计时结束，服务端结算中…（出价已暂停）
+    </p>
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { formatMoney } from '@/utils/format'
+import { useLocalCountdown } from '@/composables/useLocalCountdown'
 import type { AuctionState, PlayerState, TileState } from '@/types/game'
 
 /** 与后端 engine.MIN_BID_INCREMENT 对齐 */
 const MIN_BID_INCREMENT = 10
+/** 倒计时进入最后 5 秒时提醒一次，避免"倒计时结束才知道要结算" */
+const FINAL_COUNTDOWN_WARN = 5
 
 const props = withDefaults(
   defineProps<{
@@ -51,8 +69,10 @@ const props = withDefaults(
     tiles?: TileState[]
     currentUserId: number
     isSpectator?: boolean
+    /** WS 连接是否正常；断开时冻结出价入口 */
+    connected?: boolean
   }>(),
-  { tiles: () => [], isSpectator: false },
+  { tiles: () => [], isSpectator: false, connected: true },
 )
 
 const emit = defineEmits<{ (e: 'bid', amount: number): void }>()
@@ -72,6 +92,40 @@ watch(
   },
   { immediate: true },
 )
+
+// ─── 本地倒计时 ───
+// 服务端只下发倒计时初值（每次出价重置为 auction.countdown），不推送逐秒 tick，
+// 因此剩余秒数必须由前端本地递减；模板里也必须绑定这里的 secondsLeft，
+// 否则界面永远停在初值上（历史缺陷：倒计时"不显示 / 不走"）。
+const { secondsLeft } = useLocalCountdown(
+  () => props.auction?.countdown ?? null,
+  () => (props.auction ? `${props.auction.tile_position}:${props.auction.current_bid}:${props.auction.bid_rounds ?? 0}` : 'closed'),
+)
+
+/** 本轮倒计时归零：服务端即将结算，暂停出价避免无效请求 */
+const settling = computed(() => !!props.auction && secondsLeft.value <= 0)
+const canBidNow = computed(() => canBid.value && !settling.value && props.connected)
+const timerTagType = computed(() => (secondsLeft.value <= 5 ? 'danger' : 'warning'))
+const timerPercent = computed(() => {
+  const total = props.auction?.countdown ?? 0
+  if (!total) return 0
+  return Math.max(0, Math.min(100, Math.round((secondsLeft.value / total) * 100)))
+})
+
+/**
+ * 倒计时提醒：本轮（同一地块 + 同一出价 + 同一轮次）剩余 5 秒时提示一次，
+ * 避免用户在倒计时归零后才发现"没来得及出价"。
+ */
+let warnedRoundKey = ''
+watch(secondsLeft, (value) => {
+  const auction = props.auction
+  if (!auction) return
+  const roundKey = `${auction.tile_position}:${auction.current_bid}:${auction.bid_rounds ?? 0}`
+  if (value > FINAL_COUNTDOWN_WARN || value <= 0) return
+  if (warnedRoundKey === roundKey || !canBid.value || !props.connected) return
+  warnedRoundKey = roundKey
+  ElMessage.warning(`拍卖倒计时不足 ${FINAL_COUNTDOWN_WARN} 秒，即将结算`)
+})
 
 const bid = () => emit('bid', amount.value)
 </script>
@@ -183,5 +237,25 @@ const bid = () => emit('bid', amount.value)
 
 .auction-panel :deep(.el-tag--danger) {
   animation: gg-pulse 1.6s var(--gg-ease) infinite;
+}
+
+.auction-panel__timer {
+  margin-bottom: 8px;
+}
+
+.auction-panel__timer :deep(.el-progress-bar__outer) {
+  background: var(--gg-surface-2);
+}
+
+.auction-panel__hint--settling {
+  color: var(--gg-danger, #b3271e);
+  border: 1px dashed rgba(179, 39, 30, 0.35);
+  background: rgba(179, 39, 30, 0.06);
+}
+
+.auction-panel__hint--offline {
+  color: var(--gg-danger, #b3271e);
+  border: 1px dashed rgba(179, 39, 30, 0.35);
+  background: rgba(179, 39, 30, 0.06);
 }
 </style>

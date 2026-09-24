@@ -22,6 +22,68 @@ export interface ReconnectNotice {
   at: number
 }
 
+/** 「强制退出本局」结果（game.quit_result） */
+export interface QuitGameResult {
+  ok: boolean
+  reason: string | null
+  aiDifficulty: string | null
+  at: number
+}
+
+/** 房间解散通知（room.dissolved，房间内已无真人玩家） */
+export interface RoomDissolvedNotice {
+  roomId: string
+  reason: string
+  at: number
+}
+
+/** 服务端拒绝/异常提示（WS system.error） */
+export interface ServerErrorNotice {
+  code: number
+  message: string
+  action: string | null
+  at: number
+}
+
+/** 连接异常提示（WS 关闭码语义） */
+export interface ConnectionNotice {
+  code: number
+  label: string
+  message: string
+  /** 服务端已拒绝本次对局上下文，重连无意义（需人工退出/重进） */
+  fatal: boolean
+  at: number
+}
+
+/** 交易结果提示（收到报价 / 达成 / 被拒） */
+export interface TradeNotice {
+  kind: 'received' | 'completed' | 'rejected'
+  tradeId: string
+  text: string
+  at: number
+}
+
+/** 拍卖结果提示（出价成功 / 被超越 / 成交 / 流拍） */
+export interface AuctionNotice {
+  kind: 'bid_accepted' | 'outbid' | 'sold' | 'unsold'
+  text: string
+  at: number
+}
+
+/** 致命关闭码（与 api/ws.ts FATAL_CLOSE_CODES 对齐，4001 由登录态失效流程单独处理） */
+const FATAL_CLOSE_CODES = new Set([4002, 4003, 4004, 4005])
+
+/** 退出本局失败原因 → 中文文案 */
+const QUIT_FAIL_TEXT: Record<string, string> = {
+  no_state: '对局尚未就绪',
+  game_over: '对局已结束',
+  not_human_player: '你已不是本局真人玩家',
+  bankrupt: '你已破产，无需退出',
+}
+
+export const quitFailText = (reason: string | null | undefined) =>
+  (reason ? QUIT_FAIL_TEXT[reason] : undefined) ?? '操作未被接受'
+
 export const useGameStore = defineStore('game', () => {
   // ─── 核心状态 ───
 
@@ -38,6 +100,18 @@ export const useGameStore = defineStore('game', () => {
   const outgoingTrades = ref<TradeOffer[]>([])
   /** 最近一次重连提示（system.player_reconnected） */
   const reconnectNotice = ref<ReconnectNotice | null>(null)
+  /** 强制退出本局结果（game.quit_result），供页面提示与跳转 */
+  const quitResult = ref<QuitGameResult | null>(null)
+  /** 房间解散通知（room.dissolved） */
+  const roomDissolved = ref<RoomDissolvedNotice | null>(null)
+  /** 服务端拒绝/异常提示（system.error），页面消费后调用 clearServerError */
+  const serverError = ref<ServerErrorNotice | null>(null)
+  /** 连接异常提示（WS 关闭码），页面消费后调用 clearConnectionNotice */
+  const connectionNotice = ref<ConnectionNotice | null>(null)
+  /** 交易结果提示，页面消费后调用 clearTradeNotice */
+  const tradeNotice = ref<TradeNotice | null>(null)
+  /** 拍卖结果提示，页面消费后调用 clearAuctionNotice */
+  const auctionNotice = ref<AuctionNotice | null>(null)
 
   // ─── 当前用户 ID（由 useGame 设置） ───
 
@@ -146,6 +220,68 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  const setQuitResult = (payload: { ok: boolean; reason?: string | null; ai_difficulty?: string | null }) => {
+    quitResult.value = {
+      ok: !!payload.ok,
+      reason: payload.reason ?? null,
+      aiDifficulty: payload.ai_difficulty ?? null,
+      at: Date.now(),
+    }
+  }
+
+  const clearQuitResult = () => {
+    quitResult.value = null
+  }
+
+  const setRoomDissolved = (payload: { room_id: string; reason: string }) => {
+    roomDissolved.value = { roomId: payload.room_id, reason: payload.reason, at: Date.now() }
+  }
+
+  // ─── 操作反馈（服务端拒绝 / 连接异常 / 交易结果） ───
+
+  const setServerError = (payload: { code?: number; message?: string; action?: string | null }) => {
+    serverError.value = {
+      code: Number(payload.code ?? 0),
+      message: payload.message || '操作未被服务端接受',
+      action: payload.action ?? null,
+      at: Date.now(),
+    }
+  }
+
+  const clearServerError = () => {
+    serverError.value = null
+  }
+
+  const setConnectionNotice = (info: { code: number; label: string; message: string }) => {
+    connectionNotice.value = {
+      code: info.code,
+      label: info.label,
+      message: info.message,
+      fatal: FATAL_CLOSE_CODES.has(info.code),
+      at: Date.now(),
+    }
+  }
+
+  const clearConnectionNotice = () => {
+    connectionNotice.value = null
+  }
+
+  const setTradeNotice = (payload: { kind: TradeNotice['kind']; tradeId: string; text: string }) => {
+    tradeNotice.value = { kind: payload.kind, tradeId: payload.tradeId, text: payload.text, at: Date.now() }
+  }
+
+  const clearTradeNotice = () => {
+    tradeNotice.value = null
+  }
+
+  const setAuctionNotice = (payload: { kind: AuctionNotice['kind']; text: string }) => {
+    auctionNotice.value = { kind: payload.kind, text: payload.text, at: Date.now() }
+  }
+
+  const clearAuctionNotice = () => {
+    auctionNotice.value = null
+  }
+
   // ─── WebSocket 操作 ───
 
   const sendRollDice = () => gameWS.send('game.roll_dice')
@@ -160,6 +296,8 @@ export const useGameStore = defineStore('game', () => {
   const sendEndTurn = () => gameWS.send('game.end_turn')
   const sendJailPayBail = () => gameWS.send('game.jail_pay_bail')
   const sendJailUseCard = () => gameWS.send('game.jail_use_card')
+  /** 强制退出本局：退出后本局角色由 AI 接管继续对局 */
+  const sendQuitGame = () => gameWS.send('game.quit_game')
 
   const sendTradeOffer = (payload: TradeOfferPayload) => gameWS.sendTradeOffer(payload)
   const sendTradeAccept = (tradeId: string) => gameWS.sendTradeAccept(tradeId)
@@ -176,6 +314,12 @@ export const useGameStore = defineStore('game', () => {
     incomingTrades.value = []
     outgoingTrades.value = []
     reconnectNotice.value = null
+    quitResult.value = null
+    roomDissolved.value = null
+    serverError.value = null
+    connectionNotice.value = null
+    tradeNotice.value = null
+    auctionNotice.value = null
   }
 
   return {
@@ -190,6 +334,12 @@ export const useGameStore = defineStore('game', () => {
     incomingTrades,
     outgoingTrades,
     reconnectNotice,
+    quitResult,
+    roomDissolved,
+    serverError,
+    connectionNotice,
+    tradeNotice,
+    auctionNotice,
     // 计算属性
     myPlayer,
     currentPlayer,
@@ -214,6 +364,17 @@ export const useGameStore = defineStore('game', () => {
     receiveTradeOffer,
     resolveTrade,
     setReconnectNotice,
+    setQuitResult,
+    clearQuitResult,
+    setRoomDissolved,
+    setServerError,
+    clearServerError,
+    setConnectionNotice,
+    clearConnectionNotice,
+    setTradeNotice,
+    clearTradeNotice,
+    setAuctionNotice,
+    clearAuctionNotice,
     reset,
     // WebSocket 操作
     sendRollDice,
@@ -228,6 +389,7 @@ export const useGameStore = defineStore('game', () => {
     sendEndTurn,
     sendJailPayBail,
     sendJailUseCard,
+    sendQuitGame,
     sendTradeOffer,
     sendTradeAccept,
     sendTradeReject,

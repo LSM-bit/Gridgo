@@ -3,9 +3,11 @@
     <template #header>
       <div class="trade-panel__header">
         <span>交易</span>
-        <el-button size="small" type="primary" @click="openComposer">发起交易</el-button>
+        <el-button size="small" type="primary" :disabled="!connected" @click="openComposer">发起交易</el-button>
       </div>
     </template>
+
+    <p v-if="!connected" class="trade-panel__offline">连接已断开，交易操作已暂停，正在自动重连…</p>
 
     <div v-if="incoming.length === 0 && outgoing.length === 0">
       <EmptyState text="暂无交易提议" icon="🤝" />
@@ -27,8 +29,8 @@
         </p>
       </div>
       <div class="trade-item__actions">
-        <el-button size="small" type="success" @click="emit('accept', trade.trade_id)">接受</el-button>
-        <el-button size="small" @click="emit('reject', trade.trade_id)">拒绝</el-button>
+        <el-button size="small" type="success" :disabled="!connected" @click="emit('accept', trade.trade_id)">接受</el-button>
+        <el-button size="small" :disabled="!connected" @click="emit('reject', trade.trade_id)">拒绝</el-button>
       </div>
     </div>
 
@@ -42,7 +44,7 @@
         <p>对方付出：{{ formatMoney(trade.request_cash) }} + 地产 {{ trade.request_properties.length }} 处</p>
       </div>
       <div class="trade-item__actions">
-        <el-button size="small" @click="emit('reject', trade.trade_id)">撤回</el-button>
+        <el-button size="small" :disabled="!connected" @click="emit('reject', trade.trade_id)">撤回</el-button>
       </div>
     </div>
   </el-card>
@@ -76,7 +78,7 @@
     </el-form>
     <template #footer>
       <el-button @click="composerVisible = false">取消</el-button>
-      <el-button type="primary" :disabled="!form.targetId" @click="submit">发送提议</el-button>
+      <el-button type="primary" :disabled="!form.targetId || !connected" @click="submit">发送提议</el-button>
     </template>
   </el-dialog>
 </template>
@@ -95,8 +97,10 @@ const props = withDefaults(
     players: PlayerState[]
     tiles?: TileState[]
     currentUserId: number
+    /** WS 连接是否正常；断开时冻结交易发起 / 接受 / 拒绝入口 */
+    connected?: boolean
   }>(),
-  { tiles: () => [] },
+  { tiles: () => [], connected: true },
 )
 
 const emit = defineEmits<{
@@ -136,6 +140,10 @@ const openComposer = () => {
 }
 
 const submit = () => {
+  if (!props.connected) {
+    ElMessage.warning('连接已断开，交易提议未发送，请等待重连后重试')
+    return
+  }
   if (!form.targetId) {
     ElMessage.warning('请选择交易对象')
     return
@@ -144,6 +152,15 @@ const submit = () => {
     .split(/[,\s，]+/)
     .map((item) => Number(item))
     .filter((num) => Number.isFinite(num) && num >= 0)
+  if (
+    form.offerCash <= 0 &&
+    form.requestCash <= 0 &&
+    form.offerProperties.length === 0 &&
+    requestProperties.length === 0
+  ) {
+    ElMessage.warning('请至少填写一项交易内容（现金或地产）')
+    return
+  }
   emit('submit', {
     target_id: form.targetId,
     offer: { cash: form.offerCash, properties: [...form.offerProperties] },
@@ -162,6 +179,17 @@ const submit = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.trade-panel__offline {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px dashed rgba(179, 39, 30, 0.35);
+  background: rgba(179, 39, 30, 0.06);
+  font-size: 12px;
+  color: var(--gg-danger, #b3271e);
+  text-align: center;
 }
 
 .trade-item {

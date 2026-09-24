@@ -117,7 +117,11 @@ export function syncTokens(
     const point = tokenSlot(anchor, index, peers.length, cell)
     const existing = previous.get(player.user_id)
     if (existing) {
+      // 关键修复：位置变化时必须同步刷新像素坐标，
+      // 否则棋子会停留在旧格（drawTokens 只读 token.x/y，不再读取 position）
       existing.position = player.position
+      existing.x = point.x
+      existing.y = point.y
       next.set(player.user_id, existing)
       return
     }

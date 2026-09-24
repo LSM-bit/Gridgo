@@ -51,7 +51,10 @@ export interface AuctionState {
   current_bid: number
   current_bidder_id: number | null
   bidders: number[]
+  /** 服务端每轮拍卖的倒计时初值（秒），实时剩余秒数由前端本地递减 */
   countdown: number
+  /** 本场累计出价轮次（服务端用于限制 AI 拉锯；变化即代表有人出价） */
+  bid_rounds?: number
 }
 
 export type GamePhase =
@@ -218,8 +221,12 @@ export interface DiceResultPayload {
 
 export interface PlayerMovedPayload {
   player_id: number
-  from_position: number
-  to_position: number
+  /** 起点格（与后端 engine 广播字段 "from" 一致） */
+  from: number
+  /** 终点格（与后端 engine 广播字段 "to" 一致） */
+  to: number
+  /** 本次移动经过的格数，用于逐格补间 */
+  steps: number
   passed_go: boolean
 }
 

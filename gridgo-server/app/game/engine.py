@@ -44,6 +44,20 @@ RECONNECT_AI_WINDOW = 180
 # 拍卖最小加价幅度（docs/GAME_FLOW.md 5.1）
 MIN_BID_INCREMENT = 10
 
+# 卡死守护：周期自检间隔与 AI 任务最长存活时长（秒）
+# AI 任务挂死 / 计时器丢失 / 重连后任务未恢复时，由守护循环重建，避免对局永久卡住（问题④）
+AI_WATCHDOG_INTERVAL = 5.0
+AI_TASK_STUCK_SECONDS = 90.0
+# 拍卖倒计时（秒，与 _on_auction_timeout 恢复时保持一致）
+AUCTION_TIMEOUT_SECONDS = 15
+# 单场拍卖最大出价轮次：达到上限立即定槌成交
+# 避免「每次出价都重置 15 秒倒计时」导致 AI 之间反复拉锯、拍卖长时间不结束（问题②）
+AUCTION_MAX_BID_ROUNDS = 8
+# AI 竞价决策延迟区间（秒），决定拍卖节奏
+AI_BID_DELAY_RANGE = (0.5, 1.2)
+# 购买决策倒计时（秒）
+DECISION_TIMEOUT_SECONDS = 15
+
 
 def compute_start_price(price: int | None) -> int:
     """拍卖起拍价 = 购买价 × 50%，最低 1 元（docs/GAME_FLOW.md 5.1）"""
@@ -103,6 +117,9 @@ class GameEngine:
         # 断线重连
         self._ai_substitute: set[int] = set()  # 当前由 AI 代打的玩家
         self._disconnected_at: dict[int, float] = {}  # 玩家离线时刻 {user_id: monotonic}
+        # 卡死守护：周期性自检（AI 任务挂死 / 计时器丢失时自愈）
+        self._watchdog_task: asyncio.Task | None = None  # 守护循环任务引用
+        self._ai_task_started_at: float = 0.0  # AI 任务启动时刻（monotonic）
 
     # ═══════════════════════════════════════════════════════
     # 游戏初始化
@@ -203,7 +220,8 @@ class GameEngine:
         # 7. 存入 Redis
         await self._save_state()
 
-        # 8. 启动第一个回合
+        # 8. 确保卡死守护循环在运行，再启动第一个回合
+        self._ensure_watchdog()
         await self._start_turn()
 
         return self.state
@@ -231,6 +249,16 @@ class GameEngine:
 
         return self.state
 
+    def _should_ai_act(self, player: PlayerState | None) -> bool:
+        """该玩家当前是否应由 AI 操作
+
+        两种情况：房间内本来就是 AI 玩家；真人玩家已退出本局/判离线，由 AI 代打
+        （`_ai_substitute` 记录代打玩家）。统一判定可避免「人已退出但 AI 不接管」的卡死。
+        """
+        if player is None:
+            return False
+        return bool(player.is_ai) or player.user_id in self._ai_substitute
+
     async def resume_active_tasks(self) -> None:
         """
         根据当前游戏状态恢复后台任务（AI 回合、超时计时器）
@@ -243,6 +271,8 @@ class GameEngine:
 
         # 取消所有可能残留的旧任务
         self._cancel_all_timers()
+        # 确保卡死守护循环在运行（幂等），防止 AI 任务静默退出后对局永久停滞（问题④）
+        self._ensure_watchdog()
 
         player = self.state.get_current_player()
         if not player:
@@ -251,46 +281,73 @@ class GameEngine:
         logger = logging.getLogger(__name__)
         logger.info(f"resume_active_tasks phase={self.state.phase} player_id={player.user_id} is_ai={player.is_ai}")
 
+        # 拍卖阶段与当前玩家无关：只要拍卖仍在进行，必须恢复拍卖计时器与 AI 竞价任务，
+        # 否则任何一次 WS 连接都会取消拍卖计时器，导致拍卖永久挂起（问题②）。
+        if self.state.phase == GamePhase.AUCTION or self.state.auction is not None:
+            if self.state.auction is not None:
+                if self.state.phase != GamePhase.AUCTION:
+                    self.state.phase = GamePhase.AUCTION
+                    await self._save_state()
+                self._start_timer("auction", AUCTION_TIMEOUT_SECONDS, self._on_auction_timeout)
+                self._schedule_ai_auction_bid()
+                return
+            # 拍卖对象已丢失（异常残留状态）：回退到当前玩家的自由行动，避免对局卡死。
+            # 必须落盘，否则下次 load_state 又会把 Redis 中的坏状态读回内存（问题①）。
+            logger.warning("resume_active_tasks: auction state lost, fallback to FREE_ACTION")
+            self.state.phase = GamePhase.FREE_ACTION
+            await self._save_state()
+
+        phase = self.state.phase
+
         # 根据当前阶段恢复对应的任务
-        if self.state.phase == GamePhase.WAIT_ROLL:
-            if player.is_ai:
+        if phase == GamePhase.WAIT_ROLL:
+            if self._should_ai_act(player):
                 self._start_ai_task(self._ai_turn_loop(player))
             else:
                 self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
 
-        elif self.state.phase == GamePhase.WAIT_DECISION:
-            if player.is_ai:
-                tile = self.state.get_tile(player.position)
-                if tile:
+        elif phase == GamePhase.WAIT_DECISION:
+            tile = self.state.get_tile(player.position)
+            if self._should_ai_act(player):
+                if tile is not None and tile.owner_id is None:
                     self._start_ai_task(self._ai_buy_decision(player, tile))
+                else:
+                    # 决策对象已消失（异常残留）：直接推进回合，避免卡死
+                    self._start_ai_task(self._ai_free_action(player))
             else:
-                self._start_timer("decision", 15, self._on_decision_timeout)
+                self._start_timer("decision", DECISION_TIMEOUT_SECONDS, self._on_decision_timeout)
 
-        elif self.state.phase == GamePhase.FREE_ACTION:
-            if player.is_ai:
+        elif phase == GamePhase.FREE_ACTION:
+            if self._should_ai_act(player):
                 self._start_ai_task(self._ai_free_action(player))
             else:
                 self._start_timer("free_action", self.state.turn_timeout, self._on_free_action_timeout)
 
-        elif self.state.phase in (GamePhase.TURN_START, GamePhase.ROLLING, GamePhase.MOVING, GamePhase.TILE_EFFECT):
+        elif phase in (GamePhase.TURN_START, GamePhase.ROLLING, GamePhase.MOVING, GamePhase.TILE_EFFECT):
             # 这些是瞬态阶段，理论上不应该停留。
-            # 安全起见，如果是 AI 回合，重新启动 AI 循环
-            if player.is_ai:
+            # 安全起见，如果是 AI（或 AI 代打）回合，重新启动 AI 循环
+            if self._should_ai_act(player):
                 self._start_ai_task(self._ai_turn_loop(player))
             else:
-                # 真人玩家的瞬态阶段，短暂等待后重新检查
-                # 可能是上一次操作中途断开，尝试恢复
-                if self.state.phase == GamePhase.TURN_START:
-                    self.state.phase = GamePhase.WAIT_ROLL
-                    await self._save_state()
-                    self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
+                # 真人在瞬态阶段中断（刷新/断网）：回退到掷骰阶段，重新给出操作机会
+                logger.warning(f"resume_active_tasks: transient phase {phase} with human player, reset to WAIT_ROLL")
+                self.state.phase = GamePhase.WAIT_ROLL
+                await self._save_state()
+                self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
 
-        elif self.state.phase == GamePhase.TURN_END:
+        elif phase == GamePhase.TURN_END:
             # TURN_END 是过渡阶段，_end_turn 应该继续推进到下一回合
             # 如果卡在这里说明 AI 任务在 _end_turn 中途异常了
-            if player.is_ai:
+            if self._should_ai_act(player):
                 logger.info(f"resume_active_tasks: TURN_END phase, re-calling _end_turn for AI player={player.nickname}")
                 self._start_ai_task(self._resume_end_turn())
+            else:
+                self._start_timer("free_action", self.state.turn_timeout, self._on_free_action_timeout)
+
+        elif phase == GamePhase.BANKRUPTCY:
+            # 破产结算中的残留状态：由 AI 循环接管推进，避免卡死
+            if self._should_ai_act(player):
+                self._start_ai_task(self._ai_turn_loop(player))
 
     async def _resume_end_turn(self) -> None:
         """从 TURN_END 阶段恢复：重新执行回合结束逻辑"""
@@ -328,6 +385,7 @@ class GameEngine:
         if self._ai_task_running:
             return
         self._ai_task_running = True
+        self._ai_task_started_at = time.monotonic()
 
         async def _wrapped():
             try:
@@ -368,8 +426,32 @@ class GameEngine:
         if not self.state or self.state.phase == GamePhase.GAME_OVER:
             return
 
+        # 拍卖进行中：计时器丢失则立即重建，避免拍卖永久挂起（问题②）
+        if self.state.auction is not None:
+            auction_timer = self._timers.get("auction")
+            if auction_timer is None or auction_timer.done():
+                self._cancel_all_timers()
+                self._start_timer("auction", AUCTION_TIMEOUT_SECONDS, self._on_auction_timeout)
+                self._schedule_ai_auction_bid()
+            return
+
+        # 拍卖数据丢失（phase=AUCTION 但 auction 为 null，问题①）：属于历史遗留/异常中断的
+        # 坏状态，既无计时器也无 AI 任务可推进。此处强制回退到自由行动并落盘，
+        # 避免对局永久停滞（前端只会降级显示「拍卖中｜等待中...」，且按钮全部禁用）。
+        if self.state.phase == GamePhase.AUCTION:
+            logging.getLogger(__name__).warning(
+                f"AI watchdog: auction data lost at phase=AUCTION, fallback to FREE_ACTION: "
+                f"room_id={self.room_id}"
+            )
+            self.state.phase = GamePhase.FREE_ACTION
+            await self._save_state()
+            current = self.state.get_current_player()
+            if current is not None:
+                await self._on_enter_free_action(current.user_id)
+            return
+
         player = self.state.get_current_player()
-        if not player or not player.is_ai:
+        if not player or not self._should_ai_act(player):
             return
 
         # AI 应该在操作的阶段（包括 TURN_END，因为 _end_turn 会继续推进）
@@ -384,6 +466,55 @@ class GameEngine:
                 f"phase={self.state.phase} player={player.nickname}, recovering..."
             )
             await self.resume_active_tasks()
+
+    def _ensure_watchdog(self) -> None:
+        """确保卡死守护循环处于运行状态（幂等）"""
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            return
+        try:
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        except RuntimeError:
+            # 无运行中的事件循环（如纯同步单元测试）时跳过
+            self._watchdog_task = None
+
+    async def _watchdog_loop(self) -> None:
+        """卡死守护循环：周期性检查对局是否停滞并自愈
+
+        覆盖三类停滞（问题④：返回房间后 AI 卡住不再继续）：
+        1. AI 任务引用已完成但 `_ai_task_running` 仍为 True（异常路径漏复位）；
+        2. AI 任务存活时间超过 AI_TASK_STUCK_SECONDS（内部 await 永久挂起）；
+        3. 当前阶段应由 AI 推进但无任何任务在跑（重连 / 异常终止后未恢复）。
+        """
+        try:
+            while True:
+                await asyncio.sleep(AI_WATCHDOG_INTERVAL)
+                if not self.state or self.state.phase == GamePhase.GAME_OVER:
+                    continue
+                task = self._ai_task_ref
+                if self._ai_task_running and task is not None and task.done():
+                    # AI 任务已结束但标志未复位
+                    self._ai_task_running = False
+                if (
+                    self._ai_task_running
+                    and self._ai_task_started_at
+                    and time.monotonic() - self._ai_task_started_at > AI_TASK_STUCK_SECONDS
+                ):
+                    logging.getLogger(__name__).warning(
+                        f"AI task stuck over {AI_TASK_STUCK_SECONDS}s, restarting: "
+                        f"room_id={self.room_id} phase={self.state.phase}"
+                    )
+                    if task is not None and not task.done():
+                        task.cancel()
+                    self._ai_task_running = False
+                # 单次 tick 内的异常不得终止守护循环，否则自愈能力永久失效（问题①相关）
+                try:
+                    await self._ai_watchdog()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logging.getLogger(__name__).warning(f"watchdog tick failed: {e}")
+        except asyncio.CancelledError:
+            pass
 
     async def _start_turn(self) -> None:
         """回合开始"""
@@ -756,7 +887,7 @@ class GameEngine:
                 # AI 子流程直接 await，不创建新 task
                 await self._ai_buy_decision(player, tile)
             else:
-                self._start_timer("decision", 15, self._on_decision_timeout)
+                self._start_timer("decision", DECISION_TIMEOUT_SECONDS, self._on_decision_timeout)
 
         elif tile.owner_id == player_id:
             # 己方地产 → 可升级
@@ -1281,20 +1412,26 @@ class GameEngine:
             else:
                 mode = reconnect_mode(elapsed)
 
-            if mode != "left_game":
+            if mode == "left_game":
+                # 离线超过 3 分钟：视为已退出本局，交由 AI 接管，避免对局因无人操作卡死
+                self._ai_substitute.add(player_id)
+            else:
                 self._ai_substitute.discard(player_id)
 
-            # 若当前轮到该玩家且为真人：取消 AI 代打计时器，恢复真人操作计时
+            # 若当前轮到该玩家且为真人：取消 AI 代打计时器，按当前阶段恢复真人操作计时
+            # （原先仅处理 WAIT_ROLL，导致玩家在决策 / 自由行动阶段重连后对局卡死）
             current = self.state.get_current_player()
-            if (
-                mode != "left_game"
-                and current
-                and current.user_id == player_id
-                and not player.is_ai
-                and self.state.phase == GamePhase.WAIT_ROLL
-            ):
-                self._cancel_timer("roll")
-                self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
+            if mode != "left_game" and current and current.user_id == player_id and not player.is_ai:
+                phase = self.state.phase
+                if phase == GamePhase.WAIT_ROLL:
+                    self._cancel_timer("roll")
+                    self._start_timer("roll", self.state.turn_timeout, self._on_roll_timeout)
+                elif phase == GamePhase.WAIT_DECISION:
+                    self._cancel_timer("decision")
+                    self._start_timer("decision", DECISION_TIMEOUT_SECONDS, self._on_decision_timeout)
+                elif phase == GamePhase.FREE_ACTION:
+                    self._cancel_timer("free_action")
+                    self._start_timer("free_action", self.state.turn_timeout, self._on_free_action_timeout)
 
             if not was_offline:
                 await self._save_state()
@@ -1319,6 +1456,64 @@ class GameEngine:
 
     MIN_BID_INCREMENT = MIN_BID_INCREMENT  # docs/GAME_FLOW.md 5：最低加价 10
 
+    async def quit_game(self, player_id: int) -> dict:
+        """真人玩家强制退出本局对局 → 立即交由 AI 接管继续对局
+
+        与「离开房间」不同：退出本局的玩家仍保留在房间/对局中，只是后续操作由 AI 代打。
+
+        Returns:
+            {"ok": bool, "reason": str|None, "ai_difficulty": str|None,
+             "human_player_ids": list[int]}   # 房间内仍在场的真人玩家 id
+        """
+        if not self.state:
+            return {"ok": False, "reason": "no_state", "human_player_ids": []}
+
+        async with self._lock:
+            await self.load_state()
+            if not self.state or self.state.phase == GamePhase.GAME_OVER:
+                return {"ok": False, "reason": "game_over", "human_player_ids": []}
+
+            player = self.state.get_player_by_id(player_id)
+            if not player or player.is_ai:
+                return {"ok": False, "reason": "not_human_player", "human_player_ids": []}
+            if player.is_bankrupt:
+                return {"ok": False, "reason": "bankrupt", "human_player_ids": []}
+
+            # 转为 AI 托管：难度沿用原配置，缺省 medium
+            player.is_ai = True
+            player.ai_difficulty = player.ai_difficulty or "medium"
+            player.is_connected = False
+            self._ai_substitute.add(player_id)
+            self._disconnected_at.setdefault(player_id, time.monotonic())
+
+            self._log_turn("quit_game", player_id, {"mode": "ai_substitute"})
+            await self._save_state()
+
+            human_ids = [
+                p.user_id for p in self.state.players if (not p.is_ai) and (not p.is_bankrupt)
+            ]
+
+        await ws_manager.broadcast(self.room_id, "system.player_quit", {
+            "player_id": player_id,
+            "nickname": player.nickname,
+            "ai_difficulty": player.ai_difficulty,
+            "ai_substitute": True,
+        })
+        await ws_manager.broadcast(self.room_id, "system.player_disconnected", {
+            "player_id": player_id,
+            "mode": "ai_substitute",
+        })
+
+        # 让 AI 立即接管：若正轮到该玩家或处于拍卖阶段，resume 会启动相应的后台任务
+        await self.resume_active_tasks()
+
+        return {
+            "ok": True,
+            "reason": None,
+            "ai_difficulty": player.ai_difficulty,
+            "human_player_ids": human_ids,
+        }
+
     def _eligible_bidders(self, exclude_id: int | None = None) -> list[int]:
         """可参与拍卖的玩家（未破产，且非被排除者）"""
         if not self.state:
@@ -1338,7 +1533,7 @@ class GameEngine:
             return False
 
         tile = self.state.get_tile(tile_position)
-        if tile.owner_id is not None:
+        if tile is None or tile.owner_id is not None:
             return False
 
         bidders = self._eligible_bidders()
@@ -1374,7 +1569,7 @@ class GameEngine:
         })
 
         self._cancel_timer("auction")
-        self._start_timer("auction", 15, self._on_auction_timeout)
+        self._start_timer("auction", AUCTION_TIMEOUT_SECONDS, self._on_auction_timeout)
         self._schedule_ai_auction_bid()
         return True
 
@@ -1392,7 +1587,7 @@ class GameEngine:
         """AI 竞价循环：按难度在起拍价/当前价基础上加价，直到放弃"""
         if not self.state or not self.state.auction:
             return
-        await asyncio.sleep(random.uniform(1.0, 2.0))
+        await asyncio.sleep(random.uniform(*AI_BID_DELAY_RANGE))
 
         async with self._lock:
             await self.load_state()
@@ -1434,13 +1629,14 @@ class GameEngine:
 
             auction.current_bid = next_amount
             auction.current_bidder_id = player.user_id
+            auction.bid_rounds += 1
 
             if self._replay:
                 idx = _player_idx(self.state, player.user_id)
                 self._replay.record_auction_bid(self.state.turn_number, idx, next_amount)
 
             self._cancel_timer("auction")
-            self._start_timer("auction", 15, self._on_auction_timeout)
+            self._start_timer("auction", AUCTION_TIMEOUT_SECONDS, self._on_auction_timeout)
 
             await ws_manager.broadcast(self.room_id, "game.auction_update", {
                 "tile_id": auction.tile_position,
@@ -1449,6 +1645,13 @@ class GameEngine:
                 "min_increment": self.MIN_BID_INCREMENT,
             })
             await self._save_state()
+
+            if auction.bid_rounds >= AUCTION_MAX_BID_ROUNDS:
+                # 达到单场拍卖最大出价轮次 → 立即定槌，避免 AI 之间无限拉锯。
+                # 在锁内执行：避免与其他定槌路径（超时 / 真人出价）并发双执行（问题①）
+                self._cancel_timer("auction")
+                await self._finish_auction()
+                return
 
         self._schedule_ai_auction_bid()
 
@@ -1494,27 +1697,36 @@ class GameEngine:
                 "start_price": auction.start_price,
             })
 
-        self.state.auction = None
-        await self._save_state()
-
-        # 队列中还有待拍卖地块 → 继续下一场
-        if self._auction_queue and self.state.phase != GamePhase.GAME_OVER:
-            next_pos = self._auction_queue.pop(0)
-            if await self._start_auction(next_pos, origin=self._auction_origin):
-                return
-
+        # 原子推进（问题①）：auction 清空与 phase 回退（或续场）必须在同一次落盘中完成。
+        # 严禁先落盘「phase=AUCTION + auction=null」的中间态——该中间态一旦写入 Redis，
+        # 会被后续 load_state 反复读回，拍卖面板因无数据只能显示「等待中」，
+        # 且无任何自愈路径，导致回合永久停滞（用户反馈的「倒计时不显示 + 界面卡死」）。
         origin = self._auction_origin
         self._auction_origin = "decline"
+
+        next_pos: int | None = None
+        if self._auction_queue and self.state.phase != GamePhase.GAME_OVER:
+            next_pos = self._auction_queue.pop(0)
+
+        self.state.auction = None
+        if next_pos is not None:
+            # 续场：由 _start_auction 原子写入 auction + phase=AUCTION（单次落盘）
+            if await self._start_auction(next_pos, origin=origin):
+                return
+            # 该地块已不可拍卖（已有主 / 无竞拍者）→ 回退自由行动
+            self.state.auction = None
+
         self.state.phase = GamePhase.FREE_ACTION
         await self._save_state()
 
-        if origin == "bankruptcy":
-            # 破产回收拍卖结束后仍归属当前回合流程
-            current = self.state.get_current_player()
-            await self._on_enter_free_action(current.user_id)
-        else:
-            current = self.state.get_current_player()
-            await self._on_enter_free_action(current.user_id)
+        current = self.state.get_current_player()
+        if current is None:
+            logging.getLogger(__name__).warning(
+                f"_finish_auction: no current player, room_id={self.room_id}"
+            )
+            return
+        # 破产回收拍卖与放弃购买拍卖的后续流程一致，统一回到当前玩家的自由行动
+        await self._on_enter_free_action(current.user_id)
 
     # ═══════════════════════════════════════════════════════
     # 玩家间交易（docs/PROJECT.md 7.2：game.trade_offer/accept/reject）
@@ -1833,13 +2045,17 @@ class GameEngine:
 
         self._log_turn("decline", player_id, {"tile_id": tile_position})
 
-        # docs/GAME_FLOW.md 5：放弃购买后进入拍卖，无人出价则地块保持无主
-        self.state.phase = GamePhase.AUCTION
-        await self._save_state()
+        # docs/GAME_FLOW.md 5：放弃购买后进入拍卖，无人出价则地块保持无主。
+        # 注意：不得先把 phase 单独落盘为 AUCTION（此时 auction 仍为 None），否则 Redis 中会
+        # 留下「phase=AUCTION + auction=null」的中间态，被后续 load_state 读回后拍卖即判定为
+        # 「数据丢失」，前端只能降级显示「等待中」，回合永久停滞（问题①）。
+        # _start_auction 内部会原子写入 auction 与 phase=AUCTION（单次落盘）。
         if await self._start_auction(tile_position, origin="decline"):
             return
 
-        # 无有效竞拍者（全部破产）时直接进入自由行动
+        # 无有效竞拍者（全部破产 / 地块不可拍卖）时直接进入自由行动
+        self._auction_origin = "decline"
+        self.state.auction = None
         self.state.phase = GamePhase.FREE_ACTION
         await self._save_state()
         await self._on_enter_free_action(player_id)
@@ -1869,6 +2085,7 @@ class GameEngine:
 
             auction.current_bid = amount
             auction.current_bidder_id = player_id
+            auction.bid_rounds += 1
 
             # 回放记录：拍卖出价
             if self._replay:
@@ -1877,7 +2094,7 @@ class GameEngine:
 
             # 重置倒计时
             self._cancel_timer("auction")
-            self._start_timer("auction", 15, self._on_auction_timeout)
+            self._start_timer("auction", AUCTION_TIMEOUT_SECONDS, self._on_auction_timeout)
 
             await ws_manager.broadcast(self.room_id, "game.auction_update", {
                 "tile_id": auction.tile_position,
@@ -1887,6 +2104,11 @@ class GameEngine:
             })
 
             await self._save_state()
+            if auction.bid_rounds >= AUCTION_MAX_BID_ROUNDS:
+                # 达到单场拍卖最大出价轮次 → 立即定槌，避免 AI 之间无限拉锯
+                self._cancel_timer("auction")
+                await self._finish_auction()
+                return
             self._schedule_ai_auction_bid()
 
     # --- 建造房屋 ---
@@ -2503,10 +2725,13 @@ class GameEngine:
         if not self.state or not self.state.auction:
             return
         async with self._lock:
+            # 注意（问题①）：此处不能调用 _cancel_timer("auction")——当前协程正是该计时器的
+            # 回调任务，取消自己会在 _finish_auction 的任一 await 挂起点抛出 CancelledError，
+            # 使拍卖停在「auction 已清空、phase 未回退」的半途。此处只摘除引用，不 cancel。
+            self._timers.pop("auction", None)
             await self.load_state()
             if not self.state or not self.state.auction:
                 return
-            self._cancel_timer("auction")
             await self._finish_auction()
 
     # ═══════════════════════════════════════════════════════
@@ -2526,6 +2751,10 @@ class GameEngine:
     async def cleanup(self) -> None:
         """清理游戏资源"""
         self._cancel_all_timers()
+        # 停止卡死守护循环
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+        self._watchdog_task = None
         redis = await get_redis()
         await redis.delete(f"game:{self.room_id}")
 
@@ -2547,3 +2776,6 @@ def remove_engine(room_id: str) -> None:
     engine = _engines.pop(room_id, None)
     if engine:
         engine._cancel_all_timers()
+        if engine._watchdog_task and not engine._watchdog_task.done():
+            engine._watchdog_task.cancel()
+        engine._watchdog_task = None

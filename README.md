@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: ee1a9111a266e63ab5b365271262c0db_379bca32b7e311f183c452540024e231
+    ReservedCode1: sO6kLFXPIIW65eZrYWCsy/kcZPY2fbc7KemM0wP3NeM3uO6hwUR4DPrN+li9RNTK+8xNViE8BxyqBOt8I3iOCCXyoBpnhSoafKcQtz2ZI4aOdhkYxEuhFeL8m7Z0su4zKog3MaZT3mdiNwELUiVK4WomMYqBC5DhVSdHa8daHx8uoZ+HQVEAn/PaS70=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: ee1a9111a266e63ab5b365271262c0db_379bca32b7e311f183c452540024e231
+    ReservedCode2: sO6kLFXPIIW65eZrYWCsy/kcZPY2fbc7KemM0wP3NeM3uO6hwUR4DPrN+li9RNTK+8xNViE8BxyqBOt8I3iOCCXyoBpnhSoafKcQtz2ZI4aOdhkYxEuhFeL8m7Z0su4zKog3MaZT3mdiNwELUiVK4WomMYqBC5DhVSdHa8daHx8uoZ+HQVEAn/PaS70=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: ee1a9111a266e63ab5b365271262c0db_9855c38ab58511f19286525400638852
     ReservedCode1: WKDhjT5a98PHVliNeNcdpr+NX9d6oW1bB5/nNdaeDTW42EymdM7Mwv+unYeOZmA2mnEE08pKlrbKhrvRYF5dWHa6XkWIQtQbNWH9xKyufMZ3M1l7AH+14UYU67UT3O5kq5djlIobTXZE2Be1LN0zb59wqcTw74DyIqlRGEqfSTvZouG9MNalkVKiZ3g=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -59,8 +70,10 @@ E:\Project\GridGo\
 
 ```env
 DATABASE_URL=postgresql+asyncpg://gridgo:gridgo123@127.0.0.1:3307/gridgo
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://127.0.0.1:6380/0
 ```
+
+> Redis 端口以 `gridgo-server\.env.example` 与 `docker-compose.yml` 为准（容器 6379 映射到宿主机 `6380`），本地直连需写 `6380`。
 
 ### 2. 启动后端
 
@@ -70,15 +83,15 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 
-# 首次必须：建表 + 写入 classic 地图与卡牌种子
+# 首次必须：建表 + 写入三张地图（classic / city / island）与卡牌种子
 alembic upgrade head
-python -m scripts.seed_classic_map
+python -m scripts.seed_maps        # 仅需单张地图：--map classic；重建已有地图：--force
 
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 - API 文档：http://localhost:8001/docs
-- 健康检查：http://localhost:8001/api/v1/health
+- 健康检查：http://localhost:8001/health（公开端点，无 `/api/v1` 前缀）
 
 ### 3. 启动前端
 
@@ -97,7 +110,7 @@ Vite 已配置代理：`/api` → `http://localhost:8001`，`/ws` → `ws://loca
 | `start.bat` | 检查 Python / Node / pnpm → 不存在 `.env` 时从 `.env.example` 复制 → 创建 venv 并装依赖 → 装前端依赖（无 `node_modules` 时）→ 先后台启动后端 8001 与前端 3000 |
 | `stop.bat` | 结束占用 8001 / 3000 端口的进程 |
 
-> 注意：`start.bat` 只负责拉起进程，**不会**执行 Alembic 迁移与地图种子；首次使用请先按第 2 步手动执行 `alembic upgrade head` 与 `python -m scripts.seed_classic_map`。
+> 注意：`start.bat` 只负责拉起进程，**不会**执行 Alembic 迁移与地图种子；首次使用请先按第 2 步手动执行 `alembic upgrade head` 与 `python -m scripts.seed_maps`。
 
 ---
 
@@ -138,7 +151,7 @@ docker compose up -d --build server
 | `HOST` / `PORT` | `0.0.0.0` / `8001` | 监听地址与端口 |
 | `DATABASE_URL` | `postgresql+asyncpg://gridgo:gridgo123@127.0.0.1:3307/gridgo` | PostgreSQL 连接串 |
 | `DATABASE_ECHO` | `False` | SQL 回显 |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串 |
+| `REDIS_URL` | `redis://127.0.0.1:6380/0` | Redis 连接串（与 `.env.example`、Docker 映射端口一致） |
 | `JWT_SECRET_KEY` | `gridgo-secret-key-change-in-production` | **生产必须修改** |
 | `JWT_ALGORITHM` | `HS256` | 签名算法 |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | access token 有效期（分钟），`.env.example` 示例为 60 |
@@ -197,7 +210,7 @@ Base：本地直连 `http://localhost:8001/api/v1`；前端开发 `http://localh
 2. 连接后客户端**首帧**必须发送含 `room_id` 的 JSON（服务端只取 `room_id`，不校验 `type`）。
 3. 服务端随后单播 `state.snapshot`（含 `is_spectator`），并广播 `system.player_connected` / `system.spectator_connected`。
 
-**关闭码**：`4001` 认证失败、`4002` 首帧格式错误、`4003` 缺少 `room_id`、`4004` 初始化失败、`4005` 状态不存在。
+**关闭码**：`4001` 认证失败、`4002` 首帧格式错误、`4003` 缺少 `room_id`（房间不存在同样以该码断开）、`4004` 初始化失败、`4005` 状态不存在、`4006` 连接者不是该房间成员（非成员或已被移出房间）。
 
 **示例**
 
@@ -218,11 +231,13 @@ ws.onmessage = (e) => {
 ws.send(JSON.stringify({ type: 'game.roll_dice', data: {} }));
 ```
 
-**上行类型**：`system.ping`、`game.roll_dice`、`game.buy_property`、`game.decline_property`（别名 `game.decline_buy`）、`game.skip_property`、`game.auction_bid`、`game.auction_start`（服务端忽略）、`game.build`、`game.demolish`、`game.mortgage`、`game.redeem`、`game.end_turn`、`game.jail_pay_bail`（别名 `game.jail_pay`）、`game.jail_use_card`、`game.trade_offer`、`game.trade_accept`、`game.trade_reject`、`chat.send`
+**上行类型**：`system.ping`、`game.roll_dice`、`game.buy_property`、`game.decline_property`（别名 `game.decline_buy`）、`game.skip_property`、`game.auction_bid`、`game.auction_start`（服务端忽略）、`game.build`、`game.demolish`、`game.mortgage`、`game.redeem`、`game.end_turn`、`game.quit_game`、`game.jail_pay_bail`（别名 `game.jail_pay`）、`game.jail_use_card`、`game.trade_offer`、`game.trade_accept`、`game.trade_reject`、`chat.send`
 
-**下行类型**：`state.snapshot`、`state.update`、`game.turn_change`、`game.dice_result`、`game.extra_roll`、`game.player_moved`、`game.pass_go`（单播）、`game.tile_event`、`game.property_bought`、`game.property_declined`、`game.property_skipped`、`game.rent_paid`、`game.tax_paid`、`game.card_drawn`、`game.get_out_of_jail_card`、`game.jail_sent`、`game.jail_released`、`game.money_change`、`game.building_built`、`game.building_demolished`、`game.property_mortgaged`、`game.property_redeemed`、`game.auction_start`、`game.auction_update`、`game.auction_end`、`game.trade_offer`、`game.trade_received`（单播）、`game.trade_accept`、`game.trade_reject`、`game.trade_completed`、`game.player_bankrupt`、`game.over`、`chat.message`、`system.player_connected`、`system.player_disconnected`、`system.player_reconnected`、`system.spectator_connected`、`system.spectator_disconnected`、`system.pong`（单播）、`system.error`
+> `game.quit_game`：强制退出本局对局。退出者本人立即交由 AI 接管并继续参与本局（不退出房间，亦不解散房间）；当房间内已无真人玩家时，服务端自动解散房间并广播 `room.dissolved`。
 
-> 观战者被服务端拦截的上行操作共 16 类（含 `chat.send`），详见 [docs/PROJECT.md](docs/PROJECT.md) 第 6.2 节。消息信封为 `{type, data, timestamp}`，无 `seq` 字段。
+**下行类型**：`state.snapshot`、`state.update`、`game.turn_change`、`game.dice_result`、`game.extra_roll`、`game.player_moved`、`game.pass_go`（单播）、`game.tile_event`、`game.property_bought`、`game.property_declined`、`game.property_skipped`、`game.rent_paid`、`game.tax_paid`、`game.card_drawn`、`game.get_out_of_jail_card`、`game.jail_sent`、`game.jail_released`、`game.money_change`、`game.building_built`、`game.building_demolished`、`game.property_mortgaged`、`game.property_redeemed`、`game.auction_start`、`game.auction_update`、`game.auction_end`、`game.trade_offer`、`game.trade_received`（单播）、`game.trade_accept`、`game.trade_reject`、`game.trade_completed`、`game.player_bankrupt`、`game.quit_result`（单播）、`game.over`、`room.dissolved`、`chat.message`、`system.player_connected`、`system.player_disconnected`、`system.player_reconnected`、`system.player_quit`、`system.spectator_connected`、`system.spectator_disconnected`、`system.pong`（单播）、`system.error`
+
+> 观战者被服务端拦截的上行操作共 17 类（含 `game.quit_game`、`chat.send`），详见 [docs/PROJECT.md](docs/PROJECT.md) 第 6.2 节。消息信封为 `{type, data, timestamp}`，无 `seq` 字段。
 
 ---
 
@@ -275,10 +290,14 @@ Get-NetTCPConnection -LocalPort 8001 -State Listen | Select-Object -ExpandProper
 ```powershell
 cd E:\Project\GridGo\gridgo-server
 alembic upgrade head
-python -m scripts.seed_classic_map
+python -m scripts.seed_maps
 ```
+
+> 地图种子脚本 `scripts/seed_maps.py` 会写入 classic / city / island 三张地图（各 40 地块 + 20 卡牌）；
+> 只补单张地图用 `--map city`，需删除重建用 `--force`。旧脚本 `scripts/seed_classic_map.py` 仅种 classic，保留兼容。
 
 ### 4. 前端需要确认后端地址
 
 不要硬编码域名：开发环境统一使用相对路径 `/api`、`/ws`，由 `vite.config.ts` 代理；容器环境由 `gridgo-web/nginx.conf`（构建进 `web` 镜像）反代。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

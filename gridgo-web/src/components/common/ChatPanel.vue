@@ -68,7 +68,7 @@ const props = withDefaults(
   { height: 200 },
 )
 
-const { messages, loading, sending, hasMore, lastSendViaWS, loadInitial, loadOlder, send } = useChat({
+const { messages, loading, sending, hasMore, error: chatError, lastSendViaWS, loadInitial, loadOlder, send } = useChat({
   roomId: () => props.roomId,
 })
 
@@ -88,14 +88,19 @@ const onScroll = () => {
 
 const submit = async () => {
   const content = draft.value.trim()
-  if (!content) return
+  if (!content) {
+    ElMessage.warning('请输入消息内容')
+    return
+  }
   const ok = await send(content)
   if (!ok) {
-    ElMessage.error('消息发送失败')
+    ElMessage.error(chatError.value || '消息发送失败，请稍后重试')
     return
   }
   draft.value = ''
   scrollToBottom()
+  // 发送成功也给明确反馈：WS 断开时聊天自动走 REST 回退，需告知用户消息已送达
+  ElMessage.success(lastSendViaWS.value ? '消息已发送' : '消息已发送（连接异常，已自动回退 REST 通道）')
 }
 
 watch(() => messages.value.length, scrollToBottom)
